@@ -1,0 +1,71 @@
+name: Publish release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create or update, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CHRONOSX_RELEASE_KEYSTORE_BASE64: ${{ secrets.CHRONOSX_RELEASE_KEYSTORE_BASE64 }}
+      CHRONOSX_RELEASE_STORE_PASSWORD: ${{ secrets.CHRONOSX_RELEASE_STORE_PASSWORD }}
+      CHRONOSX_RELEASE_KEY_ALIAS: ${{ secrets.CHRONOSX_RELEASE_KEY_ALIAS }}
+      CHRONOSX_RELEASE_KEY_PASSWORD: ${{ secrets.CHRONOSX_RELEASE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android platform
+        run: sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0'
+      - name: Validate signing configuration
+        run: |
+          test -n "$CHRONOSX_RELEASE_KEYSTORE_BASE64"
+          test -n "$CHRONOSX_RELEASE_STORE_PASSWORD"
+          test -n "$CHRONOSX_RELEASE_KEY_ALIAS"
+          test -n "$CHRONOSX_RELEASE_KEY_PASSWORD"
+      - name: Decode release keystore
+        run: |
+          echo "$CHRONOSX_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/chronosx-release.p12"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and build signed release APK
+        run: |
+          ./gradlew test :app:assembleRelease --stacktrace \
+            -Pchronosx.releaseStoreFile="$RUNNER_TEMP/chronosx-release.p12" \
+            -Pchronosx.releaseStorePassword="$CHRONOSX_RELEASE_STORE_PASSWORD" \
+            -Pchronosx.releaseKeyAlias="$CHRONOSX_RELEASE_KEY_ALIAS" \
+            -Pchronosx.releaseKeyPassword="$CHRONOSX_RELEASE_KEY_PASSWORD"
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+      - name: Name release artifact
+        id: release
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/release/app-release.apk "ChronosX-${tag}.apk"
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "ChronosX $TAG" --generate-notes
+          gh release upload "$TAG" "ChronosX-${TAG}.apk" --clobber

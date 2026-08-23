@@ -46,12 +46,14 @@ ChronosX declares `minApiVersion=102`, `targetApiVersion=102`, and `staticScope=
 ## Installation
 
 1. Install and configure a compatible libxposed API 102 framework such as Vector on a test device.
-2. Build or download ChronosX, then install the manager APK.
+2. Download the signed `ChronosX-v1.0.0.apk` asset from the [v1.0.0 release](https://github.com/stupidgiraffe/ChronosX/releases/tag/v1.0.0), or build locally, then install the manager APK.
 
    ```bash
    ./gradlew assembleDebug
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
+
+   Release APKs are signed with the ChronosX release certificate. Android only accepts updates signed by the same certificate, so install release builds consistently rather than mixing debug and release installations.
 
 3. In your framework manager, enable ChronosX as a module. The module entry is packaged at `META-INF/xposed/java_init.list`.
 4. Open ChronosX and wait for **Framework connected** on the dashboard.
@@ -125,6 +127,20 @@ cd ChronosX
 ```
 
 The project uses Gradle Kotlin DSL, Kotlin, Jetpack Compose, Room, and `io.github.libxposed:api:102.0.0`. Unit tests cover clock arithmetic, fixed-mode monotonic behavior, remote preference decoding, and package filtering.
+
+### Release builds
+
+`assembleRelease` produces an unsigned APK unless all four signing properties below are supplied. This keeps private key material out of the repository while allowing a reproducible signed release build.
+
+```bash
+./gradlew :app:assembleRelease \
+  -Pchronosx.releaseStoreFile=/absolute/path/chronosx-release.p12 \
+  -Pchronosx.releaseStorePassword='…' \
+  -Pchronosx.releaseKeyAlias=chronosx-release \
+  -Pchronosx.releaseKeyPassword='…'
+```
+
+The release workflow consumes the equivalent GitHub Actions secrets and uploads `ChronosX-v<version>.apk` for `v*` tags. Never commit a keystore, password, or signed APK.
 
 For framework API details, use the official [libxposed API](https://github.com/libxposed/api) and [libxposed service](https://github.com/libxposed/service) documentation rather than legacy Xposed API examples.
 

@@ -23,6 +23,7 @@ captures/
 # Keystores and local signing data
 *.jks
 *.keystore
+*.p12
 keystore.properties
 
 # OS / editor files
