@@ -4,6 +4,8 @@ ChronosX is a scoped Android time-virtualization module and manager for libxpose
 
 It changes only the time values visible inside package scopes you explicitly enable. It is not a device-wide clock changer and intentionally refuses system packages.
 
+[☕ Support ChronosX](https://buymeacoffee.com/stupidgiraffe)
+
 > [!WARNING]
 > Use ChronosX only on devices and applications you own or are authorized to test. It can make an application inconsistent with server-side records, certificates, subscriptions, scheduled jobs, and anti-tampering policies. Server-authoritative applications may not be affected at all.
 
@@ -46,7 +48,7 @@ ChronosX declares `minApiVersion=102`, `targetApiVersion=102`, and `staticScope=
 ## Installation
 
 1. Install and configure a compatible libxposed API 102 framework such as Vector on a test device.
-2. Download the signed `ChronosX-v1.0.0.apk` asset from the [v1.0.0 release](https://github.com/stupidgiraffe/ChronosX/releases/tag/v1.0.0), or build locally, then install the manager APK.
+2. Download the signed APK from the [latest release](https://github.com/stupidgiraffe/ChronosX/releases/latest), or build locally, then install the manager APK.
 
    ```bash
    ./gradlew assembleDebug
@@ -140,13 +142,17 @@ The project uses Gradle Kotlin DSL, Kotlin, Jetpack Compose, Room, and `io.githu
   -Pchronosx.releaseKeyPassword='…'
 ```
 
-The release workflow consumes the equivalent GitHub Actions secrets and uploads `ChronosX-v<version>.apk` for `v*` tags. Never commit a keystore, password, or signed APK.
+The release workflow consumes the equivalent GitHub Actions secrets and uploads `ChronosX-<release-tag>.apk`. Never commit a keystore, password, or signed APK.
 
 For framework API details, use the official [libxposed API](https://github.com/libxposed/api) and [libxposed service](https://github.com/libxposed/service) documentation rather than legacy Xposed API examples.
 
 ## Contributing and security
 
 Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Report vulnerabilities using [SECURITY.md](SECURITY.md), not a public issue.
+
+## Support
+
+If ChronosX is useful in your development or compatibility research, you can [buy its maintainer a coffee](https://buymeacoffee.com/stupidgiraffe).
 
 ## License
 
