@@ -56,7 +56,15 @@ jobs:
           test -n "$CHRONOSX_RELEASE_KEY_PASSWORD"
       - name: Decode release keystore
         run: |
-          echo "$CHRONOSX_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/chronosx-release.p12"
+          # Accept the value alone (preferred) or the full NAME=VALUE line from
+          # the private setup bundle. Remove copy/paste whitespace without
+          # touching Base64 padding.
+          encoded="${CHRONOSX_RELEASE_KEYSTORE_BASE64#CHRONOSX_RELEASE_KEYSTORE_BASE64=}"
+          encoded="$(printf '%s' "$encoded" | tr -d '[:space:]')"
+          if ! printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/chronosx-release.p12"; then
+            echo "::error::The CHRONOSX_RELEASE_KEYSTORE_BASE64 secret is not valid Base64. Replace it with the value from the private setup bundle, or paste its complete NAME=VALUE line."
+            exit 1
+          fi
       - uses: gradle/actions/setup-gradle@v4
       - name: Test and build signed release APK
         run: |
