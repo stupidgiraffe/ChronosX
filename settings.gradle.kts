@@ -18,3 +18,5 @@ rootProject.name = "ChronosX"
 
 include(":app")
 include(":core")
+include(":lab-server")
+include(":lab-sdk")

@@ -5,11 +5,17 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.chronosx.AppContainer
 import dev.chronosx.data.DebugLogEntity
+import dev.chronosx.data.DevicePostureSnapshot
 import dev.chronosx.data.FrameworkStatus
 import dev.chronosx.data.InstalledApplication
 import dev.chronosx.data.RuleApplyResult
 import dev.chronosx.data.RunningTarget
+import dev.chronosx.data.ScenarioRunEntity
 import dev.chronosx.data.SyncResult
+import dev.chronosx.core.LabScenario
+import dev.chronosx.core.ScenarioRunStatus
+import dev.chronosx.core.TemporalProfile
+import dev.chronosx.core.TemporalProfileCodec
 import dev.chronosx.core.TimeRule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -44,6 +50,11 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
                 _uiState.update { it.copy(frameworkStatus = status) }
             }
         }
+        viewModelScope.launch {
+            container.scenarioRunRepository.runs.collectLatest { runs ->
+                _uiState.update { it.copy(scenarioRuns = runs) }
+            }
+        }
         refreshDiagnostics()
     }
 
@@ -70,7 +81,8 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
             withContext(Dispatchers.IO) {
                 container.frameworkBridge.refreshStatus()
                 val targets = container.frameworkBridge.runningTargets()
-                _uiState.update { it.copy(activeTargets = targets) }
+                val posture = container.devicePostureCollector.collect(container.frameworkBridge.status.value)
+                _uiState.update { it.copy(activeTargets = targets, devicePosture = posture) }
             }
             _uiState.update { it.copy(refreshingDiagnostics = false) }
         }
@@ -85,9 +97,9 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
                 is RuleApplyResult.Applied -> {
                     container.debugLogRepository.info(
                         "Rule",
-                        "Applied ${rule.mode} for ${rule.packageName}.",
+                        "Applied revision ${result.rule.ruleRevision} (${result.rule.mode}) for ${result.rule.packageName}.",
                     )
-                    "${rule.packageName} is active."
+                    "${result.rule.packageName} revision ${result.rule.ruleRevision} is active."
                 }
 
                 is RuleApplyResult.StoredLocally -> {
@@ -142,6 +154,46 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
     fun ruleFor(packageName: String): TimeRule =
         _uiState.value.rules.firstOrNull { it.packageName == packageName } ?: TimeRule.disabled(packageName)
 
+    fun runScenario(packageName: String, scenario: LabScenario) {
+        viewModelScope.launch {
+            val execution = withContext(Dispatchers.IO) {
+                container.scenarioRunRepository.run(scenario, packageName)
+            }
+            val source = when (execution.status) {
+                ScenarioRunStatus.FAILED, ScenarioRunStatus.OBSERVED_FAIL -> "Scenario failed"
+                ScenarioRunStatus.PENDING_FRAMEWORK -> "Scenario pending"
+                else -> "Scenario"
+            }
+            container.debugLogRepository.info(source, "${scenario.id}: ${execution.message}")
+            _messages.emit(execution.message)
+            refreshDiagnostics()
+        }
+    }
+
+    fun applyProfile(packageName: String, profile: TemporalProfile) {
+        saveRule(profile.applyTo(packageName))
+    }
+
+    fun applyTomorrow(packageName: String) {
+        val current = ruleFor(packageName)
+        saveRule(
+            current.copy(
+                enabled = true,
+                mode = dev.chronosx.core.TimeMode.OFFSET,
+                offsetMillis = 86_400_000L,
+            ),
+        )
+    }
+
+    fun profileExport(packageName: String): String =
+        TemporalProfileCodec.encode(
+            TemporalProfile.fromRule(
+                name = "${packageName} profile",
+                description = "Exported from ChronosX Manager.",
+                rule = ruleFor(packageName),
+            ),
+        )
+
     private suspend fun logSynchronization(result: SyncResult) {
         if (result.failures.isEmpty()) {
             container.debugLogRepository.info("Framework", "Synchronized ${result.synchronizedRules} rules.")
@@ -159,6 +211,8 @@ data class ChronosUiState(
     val logs: List<DebugLogEntity> = emptyList(),
     val frameworkStatus: FrameworkStatus = FrameworkStatus.disconnected(),
     val activeTargets: List<RunningTarget> = emptyList(),
+    val devicePosture: DevicePostureSnapshot = DevicePostureSnapshot.unavailable(),
+    val scenarioRuns: List<ScenarioRunEntity> = emptyList(),
     val refreshingDiagnostics: Boolean = false,
 )
 

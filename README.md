@@ -1,6 +1,6 @@
 # ChronosX
 
-ChronosX is a scoped Android time-virtualization module and manager for libxposed API 102-compatible frameworks, including Vector deployments that expose the modern libxposed service API. It is built for application development, compatibility research, and controlled test environments.
+ChronosX is a scoped Android temporal-resilience platform for libxposed API 102-compatible frameworks, including Vector deployments that expose the modern libxposed service API. It combines per-process time and timezone virtualization with runnable, evidence-producing scenarios for application development, compatibility research, and authorized test environments.
 
 It changes only the time values visible inside package scopes you explicitly enable. It is not a device-wide clock changer and intentionally refuses system packages.
 
@@ -14,8 +14,14 @@ It changes only the time values visible inside package scopes you explicitly ena
 - Dynamic, per-package libxposed scope—no global injection.
 - Kotlin manager application built with Jetpack Compose and Room.
 - Live rule transport over libxposed remote preferences.
-- Real-time, offset, and fixed-time rules.
-- Manager diagnostics for framework status, scope, saved operations, and running hooked targets.
+- Real-time, offset, and fixed-time wall-clock rules with an explicit IANA timezone policy.
+- Separate monotonic-clock policy: physical by default, explicit offset only for lab tests.
+- Main-process or all-package-process targeting, immutable rule revisions, and restart state.
+- Runnable scenario library: boundary time, TTL/expiry, DST, leap day, multi-process, monotonic, and hybrid-policy tests.
+- Portable versioned profile import/export and evidence reports shared as JSON/Markdown text.
+- Optional benchmark-result protocol for mock or customer-owned test applications; no companion is required.
+- Loopback-only controlled fixture server for staging and mock applications.
+- Manager diagnostics for framework status, scope, rule revisions, scenario history, and running hooked targets.
 - Guarded modular hook registry: an unavailable surface does not crash the target application or block other hooks.
 - Saturating clock arithmetic and monotonic fixed-mode behavior to reduce timeout/scheduler failures.
 
@@ -24,17 +30,20 @@ It changes only the time values visible inside package scopes you explicitly ena
 | Surface | Hooked API | Virtualization behavior |
 | --- | --- | --- |
 | Java wall clock | `System.currentTimeMillis()` | Real, offset, or fixed epoch milliseconds |
-| Java monotonic clock | `System.nanoTime()` | Offset or monotonic fixed timeline |
+| Java monotonic clock | `System.nanoTime()` | Physical by default; explicit monotonic offset only |
 | Legacy date | `Date()` | One-time wall-clock transformation |
 | Legacy calendar | `Calendar.getInstance()` overloads | One-time wall-clock transformation |
 | `java.time` | `Instant.now()` | Virtual instant, preserving sub-millisecond precision for offset mode |
 | `java.time` | `LocalDate.now()` | Virtual local date in the target device zone |
 | `java.time` | `LocalDateTime.now()` | Virtual local date-time in the target device zone |
+| `java.time` | `OffsetDateTime.now()` / `ZonedDateTime.now()` | Virtual wall time in the configured default zone |
 | `java.time` | `Clock.systemUTC()` | Rule-backed virtual clock |
-| Android monotonic clock | `SystemClock.elapsedRealtime()` | Offset or monotonic fixed timeline |
-| Android monotonic clock | `SystemClock.uptimeMillis()` | Offset or monotonic fixed timeline |
+| `java.time` | `Clock.systemDefaultZone()` / `Clock.system(ZoneId)` | Rule-backed default or explicit-zone clock |
+| Default timezone | `TimeZone.getDefault()` / `ZoneId.systemDefault()` | Physical or configured virtual default zone |
+| Android monotonic clock | `SystemClock.elapsedRealtime()` / `elapsedRealtimeNanos()` | Physical by default; explicit monotonic offset only |
+| Android monotonic clock | `SystemClock.uptimeMillis()` / `uptimeNanos()` | Physical by default; explicit monotonic offset only where available |
 
-Fixed wall time is exact to milliseconds. Monotonic clocks deliberately continue advancing after their fixed-mode anchor; freezing them would commonly deadlock app timeouts, animations, and schedulers.
+Fixed wall time is exact to milliseconds. Monotonic clocks remain physical by default; ChronosX never derives boot-relative clock values from a wall-clock epoch. This preserves timeout, scheduler, and animation invariants.
 
 ## Requirements
 
@@ -72,7 +81,32 @@ Saved rules remain in Room while the framework is unavailable. Use **Sync saved 
 | `OFFSET` | `+86400000` | The app sees tomorrow (`real time + 1 day`). Negative offsets provide yesterday. |
 | `FIXED_TIME` | `2027-01-01 12:00` | The app sees a chosen local timestamp. |
 
-The rule editor includes a **Preview now** control that evaluates the pending rule against the manager's current device time before saving.
+The rule editor uses date/time pickers, an IANA timezone chooser, presets, process policy, and a live **Preview now** control. Invalid partial timestamps cannot be saved.
+
+## ChronosX Lab
+
+ChronosX Lab turns a temporal rule into a reproducible authorized test run:
+
+1. Choose a built-in scenario and an installed target app.
+2. ChronosX saves a new immutable rule revision and requests target launch.
+3. An optional mock or customer-owned app receives the run metadata through its launch intent and can return a benchmark result broadcast.
+4. ChronosX records the lifecycle, rule revision, optional observed values, and an exportable report.
+
+Business-hours testing is only one local-policy fixture. The included scenario catalog also covers cache/TTL expiry, daylight-saving transitions, leap days, process consistency, monotonic behavior, and client-versus-controlled-backend disagreement.
+
+### Controlled fixture server
+
+The `lab-server` module is a real, loopback-only fixture server for apps that point to an owned mock or staging endpoint:
+
+```bash
+./gradlew :lab-server:run
+```
+
+It serves deterministic `valid`, `expired`, `stale`, `denied`, `retryable`, and malformed-contract responses at `GET /v1/time-policy`. See [lab-server/README.md](lab-server/README.md). It is not a proxy and does not intercept production traffic.
+
+### Benchmark protocol
+
+An authorized mock app can report an assertion with an explicit broadcast to `dev.chronosx`. The receiver stores the result as self-reported benchmark evidence; it never claims to prove behavior of an arbitrary third-party app. The contract is documented in [docs/benchmark-protocol.md](docs/benchmark-protocol.md).
 
 ## Safety model
 
@@ -83,6 +117,8 @@ ChronosX makes several intentional safety choices:
 - Every hook uses libxposed `ExceptionMode.PROTECTIVE`; hook exceptions fall back to the original behavior.
 - Higher-level Java date/time APIs use an internal construction bypass so a rule is applied exactly once rather than doubled through `System.currentTimeMillis()`.
 - Remote preference changes replace an immutable process snapshot atomically.
+- Rule revisions, schema versions, process policy, zone policy, and monotonic policy travel together.
+- Each hook surface is represented in a versioned capability registry shared by runtime and manager documentation.
 - The module checks both API 102 and remote-preference capability before activation.
 
 ## Limitations
@@ -95,6 +131,8 @@ ChronosX virtualizes selected Java and Android framework APIs. It cannot guarant
 - calls optimized or inlined by ART in ways a framework cannot intercept;
 - applications that intentionally detect framework injection or reject altered time.
 
+ChronosX does not alter server-authoritative entitlements, integrity verdicts, signed timestamps, or unrelated application traffic. Use the controlled fixture server or a customer-owned staging backend for hybrid-policy testing.
+
 Always test with a disposable account/data set and expect a target restart when first enabling a rule.
 
 ## Architecture
@@ -103,10 +141,12 @@ Always test with a disposable account/data set and expect a target restart when 
 flowchart TD
     Manager["ChronosX Manager\nCompose + Room"]
     Service["libxposed service\nremote preferences + scope"]
-    Module["ChronosX Core\nAPI 102 entry"]
+    Module["ChronosX Runtime\nAPI 102 entry"]
     Runtime["Process rule runtime\natomic snapshot"]
     Hooks["Modular hook registry"]
     App["Selected target app"]
+    Lab["ChronosX Lab\nscenario + evidence"]
+    Fixture["Loopback fixture server\nowned test endpoint"]
 
     Manager -->|"save rule / request scope"| Service
     Service -->|"inject only selected package"| Module
@@ -115,6 +155,9 @@ flowchart TD
     Module --> Hooks
     Runtime --> Hooks
     Hooks --> App
+    Manager --> Lab
+    Lab --> App
+    App --> Fixture
 ```
 
 More detail is in [docs/architecture.md](docs/architecture.md).
@@ -126,9 +169,10 @@ git clone https://github.com/stupidgiraffe/ChronosX.git
 cd ChronosX
 ./gradlew test
 ./gradlew assembleDebug
+./gradlew :lab-server:test
 ```
 
-The project uses Gradle Kotlin DSL, Kotlin, Jetpack Compose, Room, and `io.github.libxposed:api:102.0.0`. Unit tests cover clock arithmetic, fixed-mode monotonic behavior, remote preference decoding, and package filtering.
+The project uses Gradle Kotlin DSL, Kotlin, Jetpack Compose, Room, a loopback fixture server, and `io.github.libxposed:api:102.0.0`. Unit tests cover clock arithmetic, zone resolution, profile interchange, scenario catalog coverage, remote preference decoding, package filtering, and controlled fixture responses.
 
 ### Release builds
 

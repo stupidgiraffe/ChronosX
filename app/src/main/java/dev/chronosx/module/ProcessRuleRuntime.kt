@@ -3,11 +3,17 @@ package dev.chronosx.module
 import android.content.SharedPreferences
 import android.os.SystemClock
 import dev.chronosx.core.MonotonicAnchor
+import dev.chronosx.core.ProcessPolicy
 import dev.chronosx.core.PreferenceReader
 import dev.chronosx.core.RulePreferenceCodec
 import dev.chronosx.core.TimeEngine
+import dev.chronosx.core.TimeMode
 import dev.chronosx.core.TimeRule
+import dev.chronosx.core.ZoneMode
 import java.time.Instant
+import java.time.ZoneId
+import java.util.TimeZone
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -20,12 +26,14 @@ import java.util.concurrent.atomic.AtomicReference
  */
 internal class ProcessRuleRuntime(
     private val packageName: String,
+    private val processName: String,
     private val preferences: SharedPreferences,
     private val logger: ModuleLogger,
 ) {
     private val bypassDepth = ThreadLocal.withInitial { 0 }
     private val constructionDepth = ThreadLocal.withInitial { 0 }
     private val interestedKeys = RulePreferenceCodec.keysFor(packageName)
+    private val observedSurfaces = ConcurrentHashMap.newKeySet<String>()
 
     private val snapshot = AtomicReference(
         RuntimeSnapshot(
@@ -48,6 +56,19 @@ internal class ProcessRuleRuntime(
     }
 
     fun rule(): TimeRule = snapshot.get().rule
+
+    fun hasVirtualWallOrZone(): Boolean {
+        val rule = snapshot.get().rule
+        return rule.enabled && (rule.mode != TimeMode.REAL_TIME || rule.zoneMode == ZoneMode.VIRTUAL_DEFAULT)
+    }
+
+    fun hasVirtualDefaultZone(): Boolean =
+        snapshot.get().rule.enabled && snapshot.get().rule.zoneMode == ZoneMode.VIRTUAL_DEFAULT
+
+    fun isEligibleProcess(): Boolean = when (snapshot.get().rule.processPolicy) {
+        ProcessPolicy.ALL_PROCESSES -> true
+        ProcessPolicy.MAIN_PROCESS_ONLY -> processName == packageName
+    }
 
     fun shouldBypassHooks(): Boolean = (bypassDepth.get() ?: 0) > 0 || (constructionDepth.get() ?: 0) > 0
 
@@ -75,6 +96,26 @@ internal class ProcessRuleRuntime(
 
             else -> Instant.ofEpochMilli(virtualMillis)
                 .plusNanos((realInstant.nano % NANOS_PER_MILLI).toLong())
+        }
+    }
+
+    fun virtualDefaultZone(physicalDefault: ZoneId): ZoneId =
+        TimeEngine.zoneId(snapshot.get().rule, physicalDefault)
+
+    fun virtualDefaultZone(): ZoneId = withBypass { virtualDefaultZone(ZoneId.systemDefault()) }
+
+    fun virtualDefaultTimeZone(physicalDefault: TimeZone): TimeZone {
+        val resolved = virtualDefaultZone(physicalDefault.toZoneId())
+        return if (resolved == physicalDefault.toZoneId()) {
+            physicalDefault
+        } else {
+            withBypass { TimeZone.getTimeZone(resolved.id) }
+        }
+    }
+
+    fun observeSurface(surface: String) {
+        if (observedSurfaces.add(surface)) {
+            logger.info("Observed $surface in $processName at rule revision ${snapshot.get().rule.ruleRevision}.")
         }
     }
 
@@ -117,9 +158,13 @@ internal class ProcessRuleRuntime(
                 sourceNanos = System.nanoTime(),
             )
         }
+        if (snapshot.get().rule.ruleRevision != newRule.ruleRevision) {
+            observedSurfaces.clear()
+        }
         snapshot.set(RuntimeSnapshot(newRule, newAnchor))
         logger.debug(
-            "Rule refreshed: enabled=${newRule.enabled}, mode=${newRule.mode}, " +
+            "Rule refreshed: revision=${newRule.ruleRevision}, enabled=${newRule.enabled}, " +
+                "mode=${newRule.mode}, zone=${newRule.zoneMode}, monotonic=${newRule.monotonicMode}, " +
                 "updatedAt=${newRule.updatedAtEpochMillis}.",
         )
     }

@@ -13,6 +13,12 @@ class RulePreferenceCodecTest {
             mode = TimeMode.FIXED_TIME,
             offsetMillis = -1L,
             fixedEpochMillis = 1_798_804_800_000L,
+            zoneMode = ZoneMode.VIRTUAL_DEFAULT,
+            zoneId = "Asia/Tokyo",
+            monotonicMode = MonotonicMode.OFFSET,
+            monotonicOffsetMillis = 123L,
+            processPolicy = ProcessPolicy.MAIN_PROCESS_ONLY,
+            ruleRevision = 17L,
             updatedAtEpochMillis = 1_700_000_000_000L,
         )
         val values = RulePreferenceCodec.encode(original)

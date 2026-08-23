@@ -6,10 +6,11 @@ ChronosX is intentionally split between a manager process and a module runtime. 
 
 | Area | Responsibility |
 | --- | --- |
-| `core` | Pure `TimeRule`, `TimeEngine`, preference wire codec, and package targeting policy. JVM-testable and Android-free. |
-| `app:data` | Room entities/DAOs, installed-app discovery, libxposed service bridge, and configuration synchronization. |
-| `app:ui` | Compose manager screens and rule preview. |
+| `core` | Pure temporal rule/profile/scenario model, clock arithmetic, zone resolution, capability catalog, preference codec, and package targeting policy. JVM-testable and Android-free. |
+| `app:data` | Room entities/DAOs, installed-app discovery, scenario evidence, target launch, libxposed service bridge, and configuration synchronization. |
+| `app:ui` | Compose manager, timezone picker, process/monotonic policy controls, profiles, Lab scenario runner, and report sharing. |
 | `app:module` | libxposed API 102 entry point, remote-rule runtime, and modular hook registry. |
+| `lab-server` | Loopback-only controlled fixture service for mocks, staging builds, and authorized test targets. |
 
 ## Rule lifecycle
 
@@ -37,22 +38,40 @@ Persisting to Room first gives the manager a recoverable source of truth when th
 
 1. A target must pass `PackageTargetPolicy` before the module reads its preferences or installs hooks.
 2. The framework must expose API 102 and remote preferences.
-3. A process runtime owns one package rule snapshot and one monotonic anchor.
+3. A process runtime owns one package rule snapshot, process policy, and physical monotonic anchor.
 4. Every hook uses libxposed protective exception handling.
 5. Rule state is swapped atomically; no hook reads partially updated fields.
 6. Internal source-clock reads run under a thread-local bypass.
+7. Fixed wall-clock values never become boot-relative monotonic values.
+8. A virtual default zone is opt-in and falls back to the device zone if malformed.
 
 The bypass is particularly important for `Date()`, `Calendar.getInstance()`, and `Instant.now()`: those APIs may delegate to other hooked APIs. ChronosX lets the nested source call stay real, then applies the rule once to the completed object.
 
 ## Time model
 
-`TimeEngine` is the single source of arithmetic:
+`TimeEngine` is the single source of arithmetic and zone resolution:
 
 - `REAL_TIME`: returns the physical result.
 - `OFFSET`: uses saturating addition so malformed values cannot wrap from `Long.MAX_VALUE` to the distant past.
 - `FIXED_TIME`: returns the requested fixed epoch for wall-clock APIs.
+- `ZoneMode.VIRTUAL_DEFAULT`: resolves a validated IANA `ZoneId` for default-zone paths.
+- `MonotonicMode.PRESERVE`: passes physical elapsed/uptime/nano sources through unchanged.
+- `MonotonicMode.OFFSET`: applies an explicit independent interval-clock offset for an authorized scenario.
 
-Monotonic APIs use an anchor. For fixed mode, they begin at the fixed-time-derived anchor but continue to advance by the physical elapsed delta. This prioritizes process liveness over a fully frozen scheduler.
+The runtime records a physical monotonic anchor for diagnostics, but fixed wall-clock mode never alters
+monotonic values by default. This preserves timeout and scheduler invariants.
+
+## Lab execution and evidence
+
+`ScenarioCatalog` supplies package-independent temporal profiles and optional controlled fixture IDs.
+Running a scenario persists a fresh rule revision, asks the framework for dynamic scope, launches the
+target, and creates a durable `scenario_runs` evidence record. A cooperative mock app may return a
+benchmark result broadcast; it is stored as self-reported evidence rather than treated as a claim
+about arbitrary app behavior.
+
+The manager exports a JSON or Markdown report from the run record. The loopback-only `lab-server`
+returns deterministic fixture policies for an app that has been deliberately configured to use an
+owned test endpoint.
 
 ## Extending the registry
 

@@ -1,5 +1,7 @@
 package dev.chronosx.core
 
+import java.time.ZoneId
+
 /**
  * Pure clock arithmetic shared by the manager preview and the injected hook engine.
  * All arithmetic saturates instead of wrapping so a malformed rule cannot move time
@@ -17,59 +19,45 @@ object TimeEngine {
             }
         }
 
-    /**
-     * Establishes a monotonic timeline for APIs such as elapsedRealtime and nanoTime.
-     * Fixed wall time deliberately continues advancing after the anchor to avoid breaking
-     * loops, timeouts, and schedulers that rely on monotonic clocks.
-     */
+    /** Captures physical monotonic sources for runtime diagnostics and future test policies. */
     fun createMonotonicAnchor(
         rule: TimeRule,
         sourceMillis: Long,
         sourceNanos: Long,
-    ): MonotonicAnchor = when {
-        !rule.enabled || rule.mode == TimeMode.REAL_TIME ->
-            MonotonicAnchor(sourceMillis, sourceMillis, sourceNanos, sourceNanos)
-
-        rule.mode == TimeMode.OFFSET -> {
-            val offsetNanos = saturatedMultiply(rule.offsetMillis, NANOS_PER_MILLI)
-            MonotonicAnchor(
-                sourceMillis = sourceMillis,
-                virtualMillis = saturatedAdd(sourceMillis, rule.offsetMillis),
-                sourceNanos = sourceNanos,
-                virtualNanos = saturatedAdd(sourceNanos, offsetNanos),
-            )
-        }
-
-        else -> MonotonicAnchor(
-            sourceMillis = sourceMillis,
-            virtualMillis = rule.fixedEpochMillis,
-            sourceNanos = sourceNanos,
-            virtualNanos = saturatedMultiply(rule.fixedEpochMillis, NANOS_PER_MILLI),
-        )
-    }
+    ): MonotonicAnchor = MonotonicAnchor(
+        sourceMillis = sourceMillis,
+        sourceNanos = sourceNanos,
+    )
 
     fun monotonicMillis(
         rule: TimeRule,
         realMonotonicMillis: Long,
         anchor: MonotonicAnchor,
-    ): Long = when {
-        !rule.enabled || rule.mode == TimeMode.REAL_TIME -> realMonotonicMillis
-        rule.mode == TimeMode.OFFSET -> saturatedAdd(realMonotonicMillis, rule.offsetMillis)
-        else -> saturatedAdd(anchor.virtualMillis, saturatedSubtract(realMonotonicMillis, anchor.sourceMillis))
+    ): Long = if (rule.enabled && rule.monotonicMode == MonotonicMode.OFFSET) {
+        saturatedAdd(realMonotonicMillis, rule.monotonicOffsetMillis)
+    } else {
+        realMonotonicMillis
     }
 
     fun monotonicNanos(
         rule: TimeRule,
         realMonotonicNanos: Long,
         anchor: MonotonicAnchor,
-    ): Long = when {
-        !rule.enabled || rule.mode == TimeMode.REAL_TIME -> realMonotonicNanos
-        rule.mode == TimeMode.OFFSET -> saturatedAdd(
+    ): Long = if (rule.enabled && rule.monotonicMode == MonotonicMode.OFFSET) {
+        saturatedAdd(
             realMonotonicNanos,
-            saturatedMultiply(rule.offsetMillis, NANOS_PER_MILLI),
+            saturatedMultiply(rule.monotonicOffsetMillis, NANOS_PER_MILLI),
         )
+    } else {
+        realMonotonicNanos
+    }
 
-        else -> saturatedAdd(anchor.virtualNanos, saturatedSubtract(realMonotonicNanos, anchor.sourceNanos))
+    /** Resolves a malformed or absent requested zone safely to the physical default zone. */
+    fun zoneId(rule: TimeRule, physicalDefault: ZoneId): ZoneId = when (rule.zoneMode) {
+        ZoneMode.DEVICE_DEFAULT -> physicalDefault
+        ZoneMode.VIRTUAL_DEFAULT -> rule.zoneId
+            ?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+            ?: physicalDefault
     }
 
     fun saturatedAdd(left: Long, right: Long): Long {
@@ -98,7 +86,5 @@ object TimeEngine {
 
 data class MonotonicAnchor(
     val sourceMillis: Long,
-    val virtualMillis: Long,
     val sourceNanos: Long,
-    val virtualNanos: Long,
 )

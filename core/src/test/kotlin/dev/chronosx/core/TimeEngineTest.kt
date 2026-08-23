@@ -66,7 +66,7 @@ class TimeEngineTest {
     }
 
     @Test
-    fun `fixed monotonic timeline keeps advancing`() {
+    fun `fixed wall time preserves physical monotonic clocks`() {
         val rule = TimeRule(
             packageName = "com.example.demo",
             enabled = true,
@@ -75,8 +75,24 @@ class TimeEngineTest {
         )
         val anchor = TimeEngine.createMonotonicAnchor(rule, sourceMillis = 250L, sourceNanos = 250_000_000L)
 
-        assertEquals(1_000L, TimeEngine.monotonicMillis(rule, 250L, anchor))
-        assertEquals(1_025L, TimeEngine.monotonicMillis(rule, 275L, anchor))
-        assertEquals(1_025_000_000L, TimeEngine.monotonicNanos(rule, 275_000_000L, anchor))
+        assertEquals(250L, TimeEngine.monotonicMillis(rule, 250L, anchor))
+        assertEquals(275L, TimeEngine.monotonicMillis(rule, 275L, anchor))
+        assertEquals(275_000_000L, TimeEngine.monotonicNanos(rule, 275_000_000L, anchor))
+    }
+
+    @Test
+    fun `explicit monotonic offset is independent from wall clock mode`() {
+        val rule = TimeRule(
+            packageName = "com.example.demo",
+            enabled = true,
+            mode = TimeMode.FIXED_TIME,
+            fixedEpochMillis = 1_000L,
+            monotonicMode = MonotonicMode.OFFSET,
+            monotonicOffsetMillis = 25L,
+        )
+        val anchor = TimeEngine.createMonotonicAnchor(rule, sourceMillis = 250L, sourceNanos = 250_000_000L)
+
+        assertEquals(275L, TimeEngine.monotonicMillis(rule, 250L, anchor))
+        assertEquals(275_000_000L, TimeEngine.monotonicNanos(rule, 250_000_000L, anchor))
     }
 }

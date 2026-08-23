@@ -20,7 +20,12 @@ class TimeRuleRepository(
             return RuleApplyResult.Rejected(assessment.reason)
         }
 
-        val persisted = rule.copy(updatedAtEpochMillis = System.currentTimeMillis())
+        val previous = ruleDao.get(rule.packageName)
+        val persisted = rule.copy(
+            schemaVersion = TimeRule.CURRENT_SCHEMA_VERSION,
+            ruleRevision = (previous?.ruleRevision ?: 0L) + 1L,
+            updatedAtEpochMillis = System.currentTimeMillis(),
+        )
         ruleDao.upsert(persisted.toEntity())
 
         val remote = frameworkBridge.writeRule(persisted)
@@ -68,7 +73,11 @@ class TimeRuleRepository(
     }
 
     suspend fun delete(packageName: String): FrameworkActionResult {
-        val disabled = TimeRule.disabled(packageName).copy(updatedAtEpochMillis = System.currentTimeMillis())
+        val previous = ruleDao.get(packageName)
+        val disabled = TimeRule.disabled(packageName).copy(
+            ruleRevision = (previous?.ruleRevision ?: 0L) + 1L,
+            updatedAtEpochMillis = System.currentTimeMillis(),
+        )
         ruleDao.upsert(disabled.toEntity())
         val remote = frameworkBridge.writeRule(disabled)
         frameworkBridge.removeScope(packageName)

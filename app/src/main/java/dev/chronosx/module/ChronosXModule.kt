@@ -16,10 +16,12 @@ import io.github.libxposed.api.XposedModuleInterface
  */
 class ChronosXModule : XposedModule() {
     private lateinit var logger: ModuleLogger
+    private var processName: String = ""
     private var frameworkSupported = false
     private var activated = false
 
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
+        processName = param.processName
         logger = ModuleLogger(this, param.processName)
         val api = runCatching { apiVersion }.getOrDefault(0)
         val supportsRemoteRules = runCatching {
@@ -56,10 +58,14 @@ class ChronosXModule : XposedModule() {
 
         try {
             val preferences = getRemotePreferences(RulePreferenceCodec.GROUP)
-            val runtime = ProcessRuleRuntime(packageName, preferences, logger)
+            val runtime = ProcessRuleRuntime(packageName, processName, preferences, logger)
             runtime.start()
             if (!runtime.rule().enabled) {
                 logger.info("No enabled rule for $packageName; no hooks registered.")
+                return
+            }
+            if (!runtime.isEligibleProcess()) {
+                logger.info("Rule for $packageName excludes process $processName; no hooks registered.")
                 return
             }
 

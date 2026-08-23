@@ -1,7 +1,7 @@
 package dev.chronosx.module
 
 import android.os.SystemClock
-import dev.chronosx.core.TimeMode
+import dev.chronosx.core.HookSurface
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Executable
@@ -9,19 +9,19 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.time.ZonedDateTime
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Central registry for every supported time surface.
- *
- * Each hook is independently installed and guarded. One platform-specific hook failure therefore
- * leaves the rest of the time engine available and never prevents the target application from
- * launching. New surfaces are added by implementing [ChronosHook] and registering it below.
+ * Versioned, independently guarded registry for ChronosX's documented Java and Android clock
+ * surfaces. Each surface is represented by [HookSurface] in core so the manager, documentation,
+ * and runtime share one support contract.
  */
 internal object HookRegistry {
     private val hooks: List<ChronosHook> = listOf(
@@ -32,9 +32,17 @@ internal object HookRegistry {
         InstantNowHook,
         LocalDateNowHook,
         LocalDateTimeNowHook,
+        OffsetDateTimeNowHook,
+        ZonedDateTimeNowHook,
         ClockSystemUtcHook,
+        ClockSystemDefaultZoneHook,
+        ClockSystemZoneHook,
+        TimeZoneDefaultHook,
+        ZoneIdDefaultHook,
         ElapsedRealtimeHook,
+        ElapsedRealtimeNanosHook,
         UptimeMillisHook,
+        UptimeNanosHook,
     )
 
     fun installAll(
@@ -66,17 +74,28 @@ internal interface ChronosHook {
     fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger)
 }
 
-internal enum class HookId(val wireName: String) {
-    SYSTEM_CURRENT_TIME_MILLIS("System.currentTimeMillis"),
-    SYSTEM_NANO_TIME("System.nanoTime"),
-    DATE_CONSTRUCTOR("Date.<init>()"),
-    CALENDAR_GET_INSTANCE("Calendar.getInstance"),
-    INSTANT_NOW("Instant.now"),
-    LOCAL_DATE_NOW("LocalDate.now"),
-    LOCAL_DATE_TIME_NOW("LocalDateTime.now"),
-    CLOCK_SYSTEM_UTC("Clock.systemUTC"),
-    ELAPSED_REALTIME("SystemClock.elapsedRealtime"),
-    UPTIME_MILLIS("SystemClock.uptimeMillis"),
+internal enum class HookId(val surface: HookSurface) {
+    SYSTEM_CURRENT_TIME_MILLIS(HookSurface.SYSTEM_CURRENT_TIME_MILLIS),
+    SYSTEM_NANO_TIME(HookSurface.SYSTEM_NANO_TIME),
+    DATE_CONSTRUCTOR(HookSurface.DATE_CONSTRUCTOR),
+    CALENDAR_GET_INSTANCE(HookSurface.CALENDAR_GET_INSTANCE),
+    INSTANT_NOW(HookSurface.INSTANT_NOW),
+    LOCAL_DATE_NOW(HookSurface.LOCAL_DATE_NOW),
+    LOCAL_DATE_TIME_NOW(HookSurface.LOCAL_DATE_TIME_NOW),
+    OFFSET_DATE_TIME_NOW(HookSurface.OFFSET_DATE_TIME_NOW),
+    ZONED_DATE_TIME_NOW(HookSurface.ZONED_DATE_TIME_NOW),
+    CLOCK_SYSTEM_UTC(HookSurface.CLOCK_SYSTEM_UTC),
+    CLOCK_SYSTEM_DEFAULT_ZONE(HookSurface.CLOCK_SYSTEM_DEFAULT_ZONE),
+    CLOCK_SYSTEM_ZONE(HookSurface.CLOCK_SYSTEM_ZONE),
+    TIME_ZONE_DEFAULT(HookSurface.TIME_ZONE_DEFAULT),
+    ZONE_ID_DEFAULT(HookSurface.ZONE_ID_DEFAULT),
+    ELAPSED_REALTIME(HookSurface.ELAPSED_REALTIME),
+    ELAPSED_REALTIME_NANOS(HookSurface.ELAPSED_REALTIME_NANOS),
+    UPTIME_MILLIS(HookSurface.UPTIME_MILLIS),
+    UPTIME_NANOS(HookSurface.UPTIME_NANOS),
+    ;
+
+    val wireName: String get() = surface.wireName
 }
 
 internal data class HookInstallReport(
@@ -113,14 +132,15 @@ private object DateConstructorHook : ChronosHook {
     override val id = HookId.DATE_CONSTRUCTOR
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
-        val constructor = Date::class.java.getDeclaredConstructor()
-        module.protectiveHook(constructor, id) { chain ->
+        module.protectiveHook(Date::class.java.getDeclaredConstructor(), id) { chain ->
             if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
 
             runtime.withConstructionBypass { chain.proceed() }
             val date = chain.thisObject as? Date ?: return@protectiveHook null
-            runCatching { date.time = runtime.virtualEpochMillis(date.time) }
-                .onFailure { logger.warn("Date constructor result could not be virtualized.", it) }
+            runCatching {
+                date.time = runtime.virtualEpochMillis(date.time)
+                runtime.observeSurface(id.wireName)
+            }.onFailure { logger.warn("Date constructor result could not be virtualized.", it) }
             null
         }
     }
@@ -131,38 +151,48 @@ private object CalendarGetInstanceHook : ChronosHook {
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
         val signatures = listOf(
-            emptyArray<Class<*>>(),
-            arrayOf(TimeZone::class.java),
-            arrayOf(Locale::class.java),
-            arrayOf(TimeZone::class.java, Locale::class.java),
+            CalendarSignature(emptyArray(), usesDefaultZone = true),
+            CalendarSignature(arrayOf<Class<*>>(TimeZone::class.java), usesDefaultZone = false),
+            CalendarSignature(arrayOf<Class<*>>(Locale::class.java), usesDefaultZone = true),
+            CalendarSignature(arrayOf<Class<*>>(TimeZone::class.java, Locale::class.java), usesDefaultZone = false),
         )
-
         signatures.forEachIndexed { index, signature ->
-            val method = Calendar::class.java.getDeclaredMethod("getInstance", *signature)
+            val method = Calendar::class.java.getDeclaredMethod("getInstance", *signature.parameters)
             module.protectiveHook(method, id, suffix = index.toString()) { chain ->
                 if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
 
                 val calendar = runtime.withConstructionBypass { chain.proceed() } as? Calendar
                     ?: return@protectiveHook null
-                runCatching { calendar.timeInMillis = runtime.virtualEpochMillis(calendar.timeInMillis) }
-                    .onFailure { logger.warn("Calendar result could not be virtualized.", it) }
+                runCatching {
+                    if (signature.usesDefaultZone) {
+                        calendar.timeZone = runtime.virtualDefaultTimeZone(calendar.timeZone)
+                    }
+                    calendar.timeInMillis = runtime.virtualEpochMillis(calendar.timeInMillis)
+                    runtime.observeSurface(id.wireName)
+                }.onFailure { logger.warn("Calendar result could not be virtualized.", it) }
                 calendar
             }
         }
     }
+
+    private data class CalendarSignature(
+        val parameters: Array<Class<*>>,
+        val usesDefaultZone: Boolean,
+    )
 }
 
 private object InstantNowHook : ChronosHook {
     override val id = HookId.INSTANT_NOW
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
-        val method = Instant::class.java.getDeclaredMethod("now")
-        module.protectiveHook(method, id) { chain ->
+        module.protectiveHook(Instant::class.java.getDeclaredMethod("now"), id) { chain ->
             if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
-
-            val instant = runtime.withConstructionBypass { chain.proceed() } as? Instant
+            val original = runtime.withConstructionBypass { chain.proceed() } as? Instant
                 ?: return@protectiveHook null
-            transformOrOriginal(instant, logger, "Instant.now") { runtime.virtualInstant(instant) }
+            transformOrOriginal(original, logger, id.wireName) {
+                runtime.observeSurface(id.wireName)
+                runtime.virtualInstant(original)
+            }
         }
     }
 }
@@ -171,14 +201,14 @@ private object LocalDateNowHook : ChronosHook {
     override val id = HookId.LOCAL_DATE_NOW
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
-        val method = LocalDate::class.java.getDeclaredMethod("now")
-        module.protectiveHook(method, id) { chain ->
+        module.protectiveHook(LocalDate::class.java.getDeclaredMethod("now"), id) { chain ->
             if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
-
-            val original = runtime.withConstructionBypass { chain.proceed() }
-            transformOrOriginal(original, logger, "LocalDate.now") {
+            val original = runtime.withConstructionBypass { chain.proceed() } as? LocalDate
+                ?: return@protectiveHook null
+            transformOrOriginal(original, logger, id.wireName) {
+                runtime.observeSurface(id.wireName)
                 Instant.ofEpochMilli(runtime.virtualNowEpochMillis())
-                    .atZone(ZoneId.systemDefault())
+                    .atZone(runtime.virtualDefaultZone())
                     .toLocalDate()
             }
         }
@@ -189,15 +219,50 @@ private object LocalDateTimeNowHook : ChronosHook {
     override val id = HookId.LOCAL_DATE_TIME_NOW
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
-        val method = LocalDateTime::class.java.getDeclaredMethod("now")
-        module.protectiveHook(method, id) { chain ->
+        module.protectiveHook(LocalDateTime::class.java.getDeclaredMethod("now"), id) { chain ->
             if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
-
-            val original = runtime.withConstructionBypass { chain.proceed() }
-            transformOrOriginal(original, logger, "LocalDateTime.now") {
+            val original = runtime.withConstructionBypass { chain.proceed() } as? LocalDateTime
+                ?: return@protectiveHook null
+            transformOrOriginal(original, logger, id.wireName) {
+                runtime.observeSurface(id.wireName)
                 Instant.ofEpochMilli(runtime.virtualNowEpochMillis())
-                    .atZone(ZoneId.systemDefault())
+                    .atZone(runtime.virtualDefaultZone())
                     .toLocalDateTime()
+            }
+        }
+    }
+}
+
+private object OffsetDateTimeNowHook : ChronosHook {
+    override val id = HookId.OFFSET_DATE_TIME_NOW
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        module.protectiveHook(OffsetDateTime::class.java.getDeclaredMethod("now"), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() } as? OffsetDateTime
+                ?: return@protectiveHook null
+            transformOrOriginal(original, logger, id.wireName) {
+                runtime.observeSurface(id.wireName)
+                Instant.ofEpochMilli(runtime.virtualNowEpochMillis())
+                    .atZone(runtime.virtualDefaultZone())
+                    .toOffsetDateTime()
+            }
+        }
+    }
+}
+
+private object ZonedDateTimeNowHook : ChronosHook {
+    override val id = HookId.ZONED_DATE_TIME_NOW
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        module.protectiveHook(ZonedDateTime::class.java.getDeclaredMethod("now"), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() } as? ZonedDateTime
+                ?: return@protectiveHook null
+            transformOrOriginal(original, logger, id.wireName) {
+                runtime.observeSurface(id.wireName)
+                Instant.ofEpochMilli(runtime.virtualNowEpochMillis())
+                    .atZone(runtime.virtualDefaultZone())
             }
         }
     }
@@ -207,13 +272,85 @@ private object ClockSystemUtcHook : ChronosHook {
     override val id = HookId.CLOCK_SYSTEM_UTC
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
-        val method = Clock::class.java.getDeclaredMethod("systemUTC")
-        module.protectiveHook(method, id) { chain ->
-            val original = chain.proceed()
-            if (runtime.shouldBypassHooks() || !runtime.rule().isVirtualized) {
+        module.protectiveHook(Clock::class.java.getDeclaredMethod("systemUTC"), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() }
+            if (!runtime.hasVirtualWallOrZone()) {
                 original
             } else {
+                runtime.observeSurface(id.wireName)
                 ChronosVirtualClock(runtime, ZoneOffset.UTC)
+            }
+        }
+    }
+}
+
+private object ClockSystemDefaultZoneHook : ChronosHook {
+    override val id = HookId.CLOCK_SYSTEM_DEFAULT_ZONE
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        module.protectiveHook(Clock::class.java.getDeclaredMethod("systemDefaultZone"), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() }
+            if (!runtime.hasVirtualWallOrZone()) {
+                original
+            } else {
+                runtime.observeSurface(id.wireName)
+                ChronosVirtualClock(runtime, runtime.virtualDefaultZone())
+            }
+        }
+    }
+}
+
+private object ClockSystemZoneHook : ChronosHook {
+    override val id = HookId.CLOCK_SYSTEM_ZONE
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        module.protectiveHook(Clock::class.java.getDeclaredMethod("system", ZoneId::class.java), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() }
+            val clock = original as? Clock ?: return@protectiveHook original
+            if (!runtime.hasVirtualWallOrZone()) {
+                original
+            } else {
+                runtime.observeSurface(id.wireName)
+                ChronosVirtualClock(runtime, clock.zone)
+            }
+        }
+    }
+}
+
+private object TimeZoneDefaultHook : ChronosHook {
+    override val id = HookId.TIME_ZONE_DEFAULT
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        module.protectiveHook(TimeZone::class.java.getDeclaredMethod("getDefault"), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() } as? TimeZone
+                ?: return@protectiveHook null
+            if (!runtime.hasVirtualDefaultZone()) {
+                original
+            } else {
+                runtime.observeSurface(id.wireName)
+                runtime.virtualDefaultTimeZone(original)
+            }
+        }
+    }
+}
+
+private object ZoneIdDefaultHook : ChronosHook {
+    override val id = HookId.ZONE_ID_DEFAULT
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        module.protectiveHook(ZoneId::class.java.getDeclaredMethod("systemDefault"), id) { chain ->
+            if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
+            val original = runtime.withConstructionBypass { chain.proceed() } as? ZoneId
+                ?: return@protectiveHook null
+            if (!runtime.hasVirtualDefaultZone()) {
+                original
+            } else {
+                runtime.observeSurface(id.wireName)
+                runtime.virtualDefaultZone(original)
             }
         }
     }
@@ -229,12 +366,32 @@ private object ElapsedRealtimeHook : ChronosHook {
     }
 }
 
+private object ElapsedRealtimeNanosHook : ChronosHook {
+    override val id = HookId.ELAPSED_REALTIME_NANOS
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        installLongStaticHook(module, SystemClock::class.java.getDeclaredMethod("elapsedRealtimeNanos"), id, runtime, logger) {
+            runtime.virtualMonotonicNanos(it)
+        }
+    }
+}
+
 private object UptimeMillisHook : ChronosHook {
     override val id = HookId.UPTIME_MILLIS
 
     override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
         installLongStaticHook(module, SystemClock::class.java.getDeclaredMethod("uptimeMillis"), id, runtime, logger) {
             runtime.virtualMonotonicMillis(it)
+        }
+    }
+}
+
+private object UptimeNanosHook : ChronosHook {
+    override val id = HookId.UPTIME_NANOS
+
+    override fun install(module: XposedModule, runtime: ProcessRuleRuntime, logger: ModuleLogger) {
+        installLongStaticHook(module, SystemClock::class.java.getDeclaredMethod("uptimeNanos"), id, runtime, logger) {
+            runtime.virtualMonotonicNanos(it)
         }
     }
 }
@@ -249,10 +406,12 @@ private fun installLongStaticHook(
 ) {
     module.protectiveHook(executable, id) { chain ->
         if (runtime.shouldBypassHooks()) return@protectiveHook chain.proceed()
-
         val original = chain.proceed()
         val value = original as? Long ?: return@protectiveHook original
-        transformOrOriginal(value, logger, id.wireName) { transform(value) }
+        transformOrOriginal(value, logger, id.wireName) {
+            runtime.observeSurface(id.wireName)
+            transform(value)
+        }
     }
 }
 
@@ -277,7 +436,7 @@ private fun <T> transformOrOriginal(
     .onFailure { logger.warn("$surface transformation failed; returning the original value.", it) }
     .getOrDefault(original)
 
-/** A UTC/zone-aware clock backed by the process rule and a bypassed physical wall clock. */
+/** A wall-clock-backed Clock that preserves the zone semantics requested by the calling API. */
 private class ChronosVirtualClock(
     private val runtime: ProcessRuleRuntime,
     private val zone: ZoneId,

@@ -4,6 +4,23 @@ All notable changes to ChronosX are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - Unreleased
+
+### Added
+
+- ChronosX Lab scenario runner with durable evidence records and Markdown/JSON report sharing.
+- Portable versioned temporal profile import/export.
+- IANA default-zone virtualization policy, process policy, rule revisions, and explicit monotonic-clock policy.
+- Expanded public clock capability registry and runtime coverage for default zone, `OffsetDateTime`, `ZonedDateTime`, system `Clock` factories, and nanosecond Android monotonic surfaces.
+- Long-press application actions, Lab scenario UI, date/time pickers, timezone picker, and process/monotonic controls.
+- Optional benchmark result broadcast protocol for mock and customer-owned test targets.
+- Loopback-only `lab-server` fixture service and JVM tests.
+
+### Changed
+
+- Fixed wall time no longer seeds monotonic clocks with Unix-epoch values; physical interval clocks are preserved by default.
+- Remote rule payload now carries schema version, immutable revision, zone, process, and monotonic policies.
+
 ## [1.0.0] - 2026-08-23
 
 ### Added
