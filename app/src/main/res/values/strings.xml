@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">ChronosX</string>
+    <string name="app_description">Scoped application time virtualization for libxposed API 102 frameworks.</string>
+</resources>

@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible ChronosX manager, scope, or hook problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private logs, or production app data. Report security issues privately instead.
+  - type: input
+    id: version
+    attributes:
+      label: ChronosX version or commit
+      placeholder: "1.0.0 / abc1234"
+    validations:
+      required: true
+  - type: input
+    id: framework
+    attributes:
+      label: Framework and libxposed API version
+      placeholder: "Vector x.y, API 102"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version and device
+      placeholder: "Android 16 / Pixel test device"
+    validations:
+      required: true
+  - type: textarea
+    id: rule
+    attributes:
+      label: Rule and affected surface
+      placeholder: "OFFSET +86400000, System.currentTimeMillis()"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: "1. Enable rule ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics
+      description: Include relevant manager/framework logs with private data removed.
