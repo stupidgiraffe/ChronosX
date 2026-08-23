@@ -10,6 +10,22 @@ on:
         description: Release tag to create or update, for example v1.0.0
         required: true
         type: string
+      signing_keystore_base64:
+        description: One-time authenticated bootstrap input; use repository secrets for normal releases.
+        required: false
+        type: string
+      signing_store_password:
+        description: One-time authenticated bootstrap input; use repository secrets for normal releases.
+        required: false
+        type: string
+      signing_key_alias:
+        description: One-time authenticated bootstrap input; use repository secrets for normal releases.
+        required: false
+        type: string
+      signing_key_password:
+        description: One-time authenticated bootstrap input; use repository secrets for normal releases.
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -19,10 +35,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CHRONOSX_RELEASE_KEYSTORE_BASE64: ${{ secrets.CHRONOSX_RELEASE_KEYSTORE_BASE64 }}
-      CHRONOSX_RELEASE_STORE_PASSWORD: ${{ secrets.CHRONOSX_RELEASE_STORE_PASSWORD }}
-      CHRONOSX_RELEASE_KEY_ALIAS: ${{ secrets.CHRONOSX_RELEASE_KEY_ALIAS }}
-      CHRONOSX_RELEASE_KEY_PASSWORD: ${{ secrets.CHRONOSX_RELEASE_KEY_PASSWORD }}
+      CHRONOSX_RELEASE_KEYSTORE_BASE64: ${{ inputs.signing_keystore_base64 || secrets.CHRONOSX_RELEASE_KEYSTORE_BASE64 }}
+      CHRONOSX_RELEASE_STORE_PASSWORD: ${{ inputs.signing_store_password || secrets.CHRONOSX_RELEASE_STORE_PASSWORD }}
+      CHRONOSX_RELEASE_KEY_ALIAS: ${{ inputs.signing_key_alias || secrets.CHRONOSX_RELEASE_KEY_ALIAS }}
+      CHRONOSX_RELEASE_KEY_PASSWORD: ${{ inputs.signing_key_password || secrets.CHRONOSX_RELEASE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
