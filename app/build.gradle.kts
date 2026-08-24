@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.room)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.ksp)
 }
@@ -85,8 +86,9 @@ android {
     }
 }
 
-ksp {
-    arg("room.schemaLocation", "${project.projectDir}/schemas")
+room {
+    schemaDirectory("debug", "${project.projectDir}/schemas/debug")
+    schemaDirectory("release", "${project.projectDir}/schemas/release")
 }
 
 tasks.withType<Test>().configureEach {

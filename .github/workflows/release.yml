@@ -66,9 +66,11 @@ jobs:
             exit 1
           fi
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test and build signed release APK
+      - name: Run unit tests
+        run: ./gradlew test --stacktrace
+      - name: Build signed release APK
         run: |
-          ./gradlew test :app:assembleRelease :lab-sdk:assembleRelease --stacktrace \
+          ./gradlew :app:assembleRelease :lab-sdk:assembleRelease --stacktrace \
             -Pchronosx.releaseStoreFile="$RUNNER_TEMP/chronosx-release.p12" \
             -Pchronosx.releaseStorePassword="$CHRONOSX_RELEASE_STORE_PASSWORD" \
             -Pchronosx.releaseKeyAlias="$CHRONOSX_RELEASE_KEY_ALIAS" \
