@@ -3,6 +3,7 @@ package dev.chronosx
 import android.content.Context
 import androidx.room.Room
 import dev.chronosx.data.ChronosDatabase
+import dev.chronosx.data.CustomScenarioRepository
 import dev.chronosx.data.DebugLogRepository
 import dev.chronosx.data.DevicePostureCollector
 import dev.chronosx.data.FrameworkBridge
@@ -16,7 +17,11 @@ class AppContainer(context: Context) {
         context.applicationContext,
         ChronosDatabase::class.java,
         "chronosx.db",
-    ).addMigrations(ChronosDatabase.MIGRATION_1_2).build()
+    ).addMigrations(
+        ChronosDatabase.MIGRATION_1_2,
+        ChronosDatabase.MIGRATION_2_3,
+        ChronosDatabase.MIGRATION_3_4,
+    ).build()
 
     val frameworkBridge = FrameworkBridge()
     val installedAppsRepository = InstalledAppsRepository(context.applicationContext)
@@ -31,4 +36,5 @@ class AppContainer(context: Context) {
         timeRuleRepository = timeRuleRepository,
         targetLauncher = TargetLauncher(context.applicationContext),
     )
+    val customScenarioRepository = CustomScenarioRepository(database.customScenarioDao())
 }
