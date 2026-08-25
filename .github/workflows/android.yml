@@ -26,4 +26,4 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test --stacktrace
       - name: Assemble Android artifacts
-        run: ./gradlew :app:assembleDebug :app:assembleRelease :lab-sdk:assembleRelease --stacktrace
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :lab-sdk:assembleRelease :lab-server:test --stacktrace
