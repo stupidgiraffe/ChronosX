@@ -12,7 +12,9 @@ import dev.chronosx.data.RuleApplyResult
 import dev.chronosx.data.RunningTarget
 import dev.chronosx.data.ScenarioRunEntity
 import dev.chronosx.data.SyncResult
+import dev.chronosx.core.CustomScenario
 import dev.chronosx.core.LabScenario
+import dev.chronosx.core.RuntimeTelemetry
 import dev.chronosx.core.ScenarioRunStatus
 import dev.chronosx.core.TemporalProfile
 import dev.chronosx.core.TemporalProfileCodec
@@ -26,6 +28,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 class ChronosViewModel(private val container: AppContainer) : ViewModel() {
     private val _uiState = MutableStateFlow(ChronosUiState())
@@ -55,6 +58,11 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
                 _uiState.update { it.copy(scenarioRuns = runs) }
             }
         }
+        viewModelScope.launch {
+            container.customScenarioRepository.scenarios.collectLatest { scenarios ->
+                _uiState.update { it.copy(customScenarios = scenarios) }
+            }
+        }
         refreshDiagnostics()
     }
 
@@ -82,7 +90,15 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
                 container.frameworkBridge.refreshStatus()
                 val targets = container.frameworkBridge.runningTargets()
                 val posture = container.devicePostureCollector.collect(container.frameworkBridge.status.value)
-                _uiState.update { it.copy(activeTargets = targets, devicePosture = posture) }
+                val packageNames = _uiState.value.rules.map(TimeRule::packageName)
+                val runtimeTelemetry = container.frameworkBridge.runtimeTelemetry(packageNames, targets)
+                _uiState.update {
+                    it.copy(
+                        activeTargets = targets,
+                        devicePosture = posture,
+                        runtimeTelemetry = runtimeTelemetry,
+                    )
+                }
             }
             _uiState.update { it.copy(refreshingDiagnostics = false) }
         }
@@ -185,6 +201,50 @@ class ChronosViewModel(private val container: AppContainer) : ViewModel() {
         )
     }
 
+    fun newCustomScenario(template: LabScenario? = null): CustomScenario {
+        val now = System.currentTimeMillis()
+        return template?.let {
+            CustomScenario.fromTemplate(it, UUID.randomUUID().toString(), now)
+        } ?: CustomScenario(
+            id = UUID.randomUUID().toString(),
+            title = "Custom scenario",
+            description = "User-authored temporal resilience test.",
+            category = dev.chronosx.core.ScenarioCategory.BOUNDARY_TIME,
+            profile = TemporalProfile(
+                id = "custom-$now",
+                name = "Custom temporal policy",
+                description = "Manual Lab scenario.",
+            ),
+            expectedObservation = "Record the target's observed time, date, zone, and process behavior.",
+            createdAtEpochMillis = now,
+            updatedAtEpochMillis = now,
+        )
+    }
+
+    fun saveCustomScenario(scenario: CustomScenario) {
+        viewModelScope.launch {
+            val saved = scenario.copy(
+                title = scenario.title.trim(),
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            )
+            val result = runCatching {
+                withContext(Dispatchers.IO) { container.customScenarioRepository.save(saved) }
+            }
+            result.onSuccess {
+                _messages.emit("Saved custom scenario: ${saved.title}")
+            }.onFailure { error ->
+                _messages.emit(error.message ?: "Custom scenario could not be saved.")
+            }
+        }
+    }
+
+    fun deleteCustomScenario(id: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { container.customScenarioRepository.delete(id) }
+            _messages.emit("Custom scenario removed.")
+        }
+    }
+
     fun profileExport(packageName: String): String =
         TemporalProfileCodec.encode(
             TemporalProfile.fromRule(
@@ -213,6 +273,8 @@ data class ChronosUiState(
     val activeTargets: List<RunningTarget> = emptyList(),
     val devicePosture: DevicePostureSnapshot = DevicePostureSnapshot.unavailable(),
     val scenarioRuns: List<ScenarioRunEntity> = emptyList(),
+    val customScenarios: List<CustomScenario> = emptyList(),
+    val runtimeTelemetry: List<RuntimeTelemetry> = emptyList(),
     val refreshingDiagnostics: Boolean = false,
 )
 
