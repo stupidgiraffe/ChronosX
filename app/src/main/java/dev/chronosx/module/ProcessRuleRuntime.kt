@@ -6,6 +6,9 @@ import dev.chronosx.core.MonotonicAnchor
 import dev.chronosx.core.ProcessPolicy
 import dev.chronosx.core.PreferenceReader
 import dev.chronosx.core.RulePreferenceCodec
+import dev.chronosx.core.RuntimeTelemetry
+import dev.chronosx.core.RuntimeTelemetryCodec
+import dev.chronosx.core.RuntimeTelemetryPhase
 import dev.chronosx.core.TimeEngine
 import dev.chronosx.core.TimeMode
 import dev.chronosx.core.TimeRule
@@ -28,12 +31,15 @@ internal class ProcessRuleRuntime(
     private val packageName: String,
     private val processName: String,
     private val preferences: SharedPreferences,
+    private val runtimePreferences: SharedPreferences,
     private val logger: ModuleLogger,
 ) {
     private val bypassDepth = ThreadLocal.withInitial { 0 }
     private val constructionDepth = ThreadLocal.withInitial { 0 }
     private val interestedKeys = RulePreferenceCodec.keysFor(packageName)
     private val observedSurfaces = ConcurrentHashMap.newKeySet<String>()
+    private val installedSurfaces = ConcurrentHashMap.newKeySet<String>()
+    private val failedSurfaces = ConcurrentHashMap<String, String>()
 
     private val snapshot = AtomicReference(
         RuntimeSnapshot(
@@ -55,11 +61,32 @@ internal class ProcessRuleRuntime(
         preferences.registerOnSharedPreferenceChangeListener(preferenceListener)
     }
 
+    fun recordHookInstallation(report: HookInstallReport) {
+        installedSurfaces.clear()
+        installedSurfaces.addAll(report.installed.map { it.wireName })
+        failedSurfaces.clear()
+        report.failures.forEach { failure -> failedSurfaces[failure.id.wireName] = failure.reason }
+
+        publishTelemetry(
+            phase = if (report.installed.isEmpty()) RuntimeTelemetryPhase.FAILED else RuntimeTelemetryPhase.HOOKS_INSTALLED,
+            message = if (report.installed.isEmpty()) {
+                "No supported hook surfaces installed."
+            } else {
+                "Installed ${report.installed.size} surfaces; ${report.failures.size} unavailable."
+            },
+        )
+    }
+
     fun rule(): TimeRule = snapshot.get().rule
 
     fun hasVirtualWallOrZone(): Boolean {
         val rule = snapshot.get().rule
         return rule.enabled && (rule.mode != TimeMode.REAL_TIME || rule.zoneMode == ZoneMode.VIRTUAL_DEFAULT)
+    }
+
+    fun hasVirtualWallClock(): Boolean {
+        val rule = snapshot.get().rule
+        return rule.enabled && rule.mode != TimeMode.REAL_TIME
     }
 
     fun hasVirtualDefaultZone(): Boolean =
@@ -116,6 +143,10 @@ internal class ProcessRuleRuntime(
     fun observeSurface(surface: String) {
         if (observedSurfaces.add(surface)) {
             logger.info("Observed $surface in $processName at rule revision ${snapshot.get().rule.ruleRevision}.")
+            publishTelemetry(
+                phase = RuntimeTelemetryPhase.OBSERVING,
+                message = "Observed ${observedSurfaces.size} hook surface(s).",
+            )
         }
     }
 
@@ -165,8 +196,49 @@ internal class ProcessRuleRuntime(
         logger.debug(
             "Rule refreshed: revision=${newRule.ruleRevision}, enabled=${newRule.enabled}, " +
                 "mode=${newRule.mode}, zone=${newRule.zoneMode}, monotonic=${newRule.monotonicMode}, " +
-                "updatedAt=${newRule.updatedAtEpochMillis}.",
+            "updatedAt=${newRule.updatedAtEpochMillis}.",
         )
+        publishTelemetry(
+            phase = RuntimeTelemetryPhase.RULE_LOADED,
+            message = "Loaded rule revision ${newRule.ruleRevision}; restart is no longer required for this process.",
+        )
+    }
+
+    /** Publishes only package-scoped local telemetry through Vector's remote-preferences channel. */
+    private fun publishTelemetry(phase: RuntimeTelemetryPhase, message: String?) {
+        val currentRule = snapshot.get().rule
+        if (!currentRule.enabled || !isEligibleProcess()) return
+
+        runCatching {
+            val reader = SharedPreferencesReader(runtimePreferences)
+            val knownProcesses = RuntimeTelemetryCodec.knownProcesses(packageName, reader) + processName
+            val telemetry = RuntimeTelemetry(
+                packageName = packageName,
+                processName = processName,
+                ruleRevision = currentRule.ruleRevision,
+                phase = phase,
+                installedSurfaces = installedSurfaces.toSet(),
+                failedSurfaces = failedSurfaces.toMap(),
+                observedSurfaces = observedSurfaces.toSet(),
+                updatedAtEpochMillis = sourceEpochMillis(),
+                message = message,
+            )
+            val editor = runtimePreferences.edit() ?: error("Runtime telemetry editor is unavailable.")
+            RuntimeTelemetryCodec.encode(telemetry).forEach { (key, value) ->
+                when (value) {
+                    is Long -> editor.putLong(key, value)
+                    is String -> editor.putString(key, value)
+                    else -> error("Unsupported runtime telemetry value for $key")
+                }
+            }
+            editor.putString(
+                RuntimeTelemetryCodec.knownProcessesKey(packageName),
+                RuntimeTelemetryCodec.encodeKnownProcesses(knownProcesses),
+            )
+            check(editor.commit()) { "Runtime telemetry commit failed." }
+        }.onFailure { error ->
+            logger.warn("Unable to publish runtime telemetry for $processName.", error)
+        }
     }
 
     private fun sourceEpochMillis(): Long = withBypass { System.currentTimeMillis() }
