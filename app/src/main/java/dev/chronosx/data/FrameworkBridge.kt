@@ -1,6 +1,9 @@
 package dev.chronosx.data
 
 import dev.chronosx.core.RulePreferenceCodec
+import dev.chronosx.core.PreferenceReader
+import dev.chronosx.core.RuntimeTelemetry
+import dev.chronosx.core.RuntimeTelemetryCodec
 import dev.chronosx.core.TimeRule
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
@@ -114,6 +117,55 @@ class FrameworkBridge : XposedServiceHelper.OnServiceListener {
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * Reads process-scoped runtime evidence written by ChronosX itself. This is deliberately
+     * separate from rule delivery so the manager can distinguish saved, scoped, installed, and
+     * actually observed hook surfaces without inspecting an arbitrary target application.
+     */
+    fun runtimeTelemetry(
+        packageNames: Collection<String>,
+        runningTargets: Collection<RunningTarget> = emptyList(),
+    ): List<RuntimeTelemetry> {
+        val service = serviceRef.get() ?: return emptyList()
+        if (compatibilityFailure(service) != null) return emptyList()
+        if (service.getFrameworkProperties() and XposedService.PROP_CAP_REMOTE == 0L) return emptyList()
+
+        return runCatching {
+            val reader = RemotePreferenceReader(service.getRemotePreferences(RuntimeTelemetryCodec.GROUP))
+            packageNames.distinct().flatMap { packageName ->
+                val activeProcesses = runningTargets.asSequence()
+                    .map(RunningTarget::processName)
+                    .filter { processName ->
+                        processName == packageName || processName.startsWith("$packageName:")
+                    }
+                    .toSet()
+                (RuntimeTelemetryCodec.knownProcesses(packageName, reader) + activeProcesses)
+                    .mapNotNull { processName ->
+                        runCatching { RuntimeTelemetryCodec.read(packageName, processName, reader) }.getOrNull()
+                    }
+            }.sortedWith(compareBy<RuntimeTelemetry>({ it.packageName }, { it.processName }))
+        }.getOrDefault(emptyList())
+    }
+
+    fun clearRuntimeTelemetry(packageName: String): FrameworkActionResult {
+        val service = serviceRef.get() ?: return FrameworkActionResult.Unavailable
+        compatibilityFailure(service)?.let { return it }
+        if (service.getFrameworkProperties() and XposedService.PROP_CAP_REMOTE == 0L) {
+            return FrameworkActionResult.Failed("This framework does not expose remote preferences.")
+        }
+        return runCatching {
+            val preferences = service.getRemotePreferences(RuntimeTelemetryCodec.GROUP)
+            val reader = RemotePreferenceReader(preferences)
+            val editor = preferences.edit() ?: error("Runtime telemetry editor is unavailable.")
+            RuntimeTelemetryCodec.knownProcesses(packageName, reader).forEach { processName ->
+                RuntimeTelemetryCodec.keysFor(packageName, processName).forEach { key -> editor.remove(key) }
+            }
+            editor.remove(RuntimeTelemetryCodec.knownProcessesKey(packageName))
+            check(editor.commit()) { "Runtime telemetry cleanup failed." }
+            FrameworkActionResult.Success
+        }.getOrElse { FrameworkActionResult.Failed(it.message ?: "Unable to clear runtime telemetry.") }
+    }
+
     private fun statusFor(service: XposedService): FrameworkStatus = runCatching {
         val properties = service.frameworkProperties
         val apiVersion = service.apiVersion
@@ -152,6 +204,19 @@ class FrameworkBridge : XposedServiceHelper.OnServiceListener {
         }
     }.getOrElse {
         FrameworkActionResult.Failed(it.message ?: "Unable to determine framework API version.")
+    }
+
+    private class RemotePreferenceReader(
+        private val preferences: android.content.SharedPreferences,
+    ) : PreferenceReader {
+        override fun boolean(key: String, defaultValue: Boolean): Boolean =
+            preferences.getBoolean(key, defaultValue)
+
+        override fun long(key: String, defaultValue: Long): Long =
+            preferences.getLong(key, defaultValue)
+
+        override fun string(key: String, defaultValue: String): String =
+            preferences.getString(key, defaultValue) ?: defaultValue
     }
 }
 
