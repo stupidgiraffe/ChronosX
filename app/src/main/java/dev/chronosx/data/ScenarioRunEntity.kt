@@ -8,11 +8,15 @@ import dev.chronosx.core.ScenarioRunStatus
 @Entity(tableName = "scenario_runs")
 data class ScenarioRunEntity(
     @PrimaryKey val runId: String,
+    /** Opaque per-run correlation token; never presented as an authentication mechanism. */
+    val runToken: String,
     val scenarioId: String,
     val scenarioTitle: String,
     val targetPackage: String,
     val ruleRevision: Long,
     val fixtureId: String?,
+    /** Immutable [dev.chronosx.core.LabScenarioCodec] snapshot for reproducible evidence. */
+    val scenarioSnapshot: String?,
     val status: String,
     val summary: String,
     val startedAtEpochMillis: Long,
@@ -22,6 +26,8 @@ data class ScenarioRunEntity(
     val observedZoneId: String?,
     val observedProcessName: String?,
     val observedSurfaces: String?,
+    /** Encoded [dev.chronosx.core.DateCapabilityMatrixCodec] data from an authorized target. */
+    val observedDateMatrix: String?,
 )
 
 val ScenarioRunEntity.runStatus: ScenarioRunStatus
@@ -29,6 +35,7 @@ val ScenarioRunEntity.runStatus: ScenarioRunStatus
 
 data class BenchmarkObservation(
     val runId: String,
+    val runToken: String,
     val sourcePackage: String,
     val processName: String?,
     val ruleRevision: Long,
@@ -36,5 +43,6 @@ data class BenchmarkObservation(
     val observedWallEpochMillis: Long?,
     val observedZoneId: String?,
     val observedSurfaces: String?,
+    val dateCapabilityMatrix: dev.chronosx.core.DateCapabilityMatrix?,
     val message: String?,
 )
