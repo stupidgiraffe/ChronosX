@@ -6,14 +6,20 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [TimeRuleEntity::class, DebugLogEntity::class, ScenarioRunEntity::class],
-    version = 2,
+    entities = [
+        TimeRuleEntity::class,
+        DebugLogEntity::class,
+        ScenarioRunEntity::class,
+        CustomScenarioEntity::class,
+    ],
+    version = 4,
     exportSchema = true,
 )
 abstract class ChronosDatabase : RoomDatabase() {
     abstract fun timeRuleDao(): TimeRuleDao
     abstract fun debugLogDao(): DebugLogDao
     abstract fun scenarioRunDao(): ScenarioRunDao
+    abstract fun customScenarioDao(): CustomScenarioDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -34,6 +40,24 @@ abstract class ChronosDatabase : RoomDatabase() {
                         "observedZoneId TEXT, observedProcessName TEXT, observedSurfaces TEXT, " +
                         "PRIMARY KEY(runId))",
                 )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE scenario_runs ADD COLUMN scenarioSnapshot TEXT")
+                database.execSQL("ALTER TABLE scenario_runs ADD COLUMN observedDateMatrix TEXT")
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS custom_scenarios (" +
+                        "id TEXT NOT NULL, title TEXT NOT NULL, updatedAtEpochMillis INTEGER NOT NULL, " +
+                        "payload TEXT NOT NULL, PRIMARY KEY(id))",
+                )
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE scenario_runs ADD COLUMN runToken TEXT NOT NULL DEFAULT ''")
             }
         }
     }
