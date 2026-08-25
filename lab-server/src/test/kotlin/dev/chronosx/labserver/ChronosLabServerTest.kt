@@ -30,4 +30,17 @@ class ChronosLabServerTest {
             assertTrue(connection.inputStream.bufferedReader().readText().contains("chronosx-lab"))
         }
     }
+
+    @Test
+    fun `explicit fixture kind lets a custom scenario control owned mock behavior`() {
+        ChronosLabServer.create(port = 0).use { server ->
+            server.start()
+            val connection = URL(
+                "http://127.0.0.1:${server.port}/v1/time-policy?fixture=quarter-end&kind=STALE",
+            ).openConnection() as HttpURLConnection
+
+            assertEquals(200, connection.responseCode)
+            assertTrue(connection.inputStream.bufferedReader().readText().contains("stale"))
+        }
+    }
 }

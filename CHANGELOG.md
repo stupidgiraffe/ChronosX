@@ -4,7 +4,26 @@ All notable changes to ChronosX are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.1.0] - Unreleased
+## [1.2.0] - Unreleased
+
+### Added
+
+- Date Capability Matrix protocol and `DateCapabilityProbe` for authorized mock/customer targets. The matrix captures observed epoch, local date, zone, and error state for supported legacy, `java.time`, chronology, and Android ICU paths.
+- Process-scoped runtime telemetry transported through libxposed remote preferences: rule loaded, hook installation, observed surfaces, and failures are visible in the manager.
+- Date-focused hook surfaces for `GregorianCalendar`, Android ICU Calendar/TimeZone, `ZoneId` overloads of Java time factories, and ISO/Japanese/Hijrah/Minguo/Thai chronology factories.
+- Best-effort ART deoptimization for documented wall-clock and timezone hooks.
+- Custom Scenario Builder with manual time, fixed instant, timezone, process, monotonic, controlled-fixture, and assertion settings.
+- Immutable scenario snapshots and date-matrix evidence in JSON/Markdown exports.
+- Launch metadata and Lab SDK parsing for controlled loopback fixture choice and delay.
+- Per-run correlation tokens so an authorized benchmark result cannot be accidentally attached to
+  another Lab run.
+
+### Changed
+
+- Dashboard, applications, debug, and settings now distinguish saved/scope/restart states from installed, observed, stale, and failed runtime evidence.
+- Custom Lab fixtures can explicitly select an owned Lab-server response kind instead of relying on a preset fixture name.
+
+## [1.1.0] - 2026-08-25
 
 ### Added
 

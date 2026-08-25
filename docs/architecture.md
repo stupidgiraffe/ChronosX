@@ -6,10 +6,10 @@ ChronosX is intentionally split between a manager process and a module runtime. 
 
 | Area | Responsibility |
 | --- | --- |
-| `core` | Pure temporal rule/profile/scenario model, clock arithmetic, zone resolution, capability catalog, preference codec, and package targeting policy. JVM-testable and Android-free. |
-| `app:data` | Room entities/DAOs, installed-app discovery, scenario evidence, target launch, libxposed service bridge, and configuration synchronization. |
-| `app:ui` | Compose manager, timezone picker, process/monotonic policy controls, profiles, Lab scenario runner, and report sharing. |
-| `app:module` | libxposed API 102 entry point, remote-rule runtime, and modular hook registry. |
+| `core` | Pure temporal rule/profile/scenario model, clock arithmetic, zone resolution, capability catalog, date-matrix/runtime-telemetry codecs, and package targeting policy. JVM-testable and Android-free. |
+| `app:data` | Room entities/DAOs, installed-app discovery, custom scenarios, scenario evidence, target launch, libxposed service bridge, and configuration synchronization. |
+| `app:ui` | Compose manager, timezone picker, process/monotonic policy controls, profiles, custom Scenario Builder, runtime capability matrix, and report sharing. |
+| `app:module` | libxposed API 102 entry point, remote-rule runtime, process telemetry publisher, and modular hook registry. |
 | `lab-server` | Loopback-only controlled fixture service for mocks, staging builds, and authorized test targets. |
 
 ## Rule lifecycle
@@ -30,6 +30,8 @@ sequenceDiagram
     P->>P: Read rule and install guarded hooks
     S-->>P: Preference-change callback
     P->>P: Atomically replace runtime snapshot
+    P->>S: Publish process telemetry
+    S-->>M: Read hook lifecycle evidence
 ```
 
 Persisting to Room first gives the manager a recoverable source of truth when the framework service is unavailable. The user can later synchronize all stored rules.
@@ -44,6 +46,8 @@ Persisting to Room first gives the manager a recoverable source of truth when th
 6. Internal source-clock reads run under a thread-local bypass.
 7. Fixed wall-clock values never become boot-relative monotonic values.
 8. A virtual default zone is opt-in and falls back to the device zone if malformed.
+9. A shared process with a second independently selected package produces an explicit runtime
+   conflict telemetry record; ChronosX never merges distinct package rules into one process.
 
 The bypass is particularly important for `Date()`, `Calendar.getInstance()`, and `Instant.now()`: those APIs may delegate to other hooked APIs. ChronosX lets the nested source call stay real, then applies the rule once to the completed object.
 
@@ -63,11 +67,14 @@ monotonic values by default. This preserves timeout and scheduler invariants.
 
 ## Lab execution and evidence
 
-`ScenarioCatalog` supplies package-independent temporal profiles and optional controlled fixture IDs.
-Running a scenario persists a fresh rule revision, asks the framework for dynamic scope, launches the
-target, and creates a durable `scenario_runs` evidence record. A cooperative mock app may return a
-benchmark result broadcast; it is stored as self-reported evidence rather than treated as a claim
-about arbitrary app behavior.
+`ScenarioCatalog` supplies immutable package-independent templates. `CustomScenario` supplies
+persisted, editable manual policies. Running either form snapshots the complete scenario, persists a
+fresh rule revision, asks the framework for dynamic scope, launches the target with optional
+controlled-fixture metadata plus a per-run correlation token, and creates a durable `scenario_runs`
+evidence record. A cooperative
+mock app may return a benchmark result broadcast and a date-capability matrix; both are stored as
+self-reported evidence rather than treated as a claim about arbitrary app behavior. The token avoids
+accidentally associating another app's broadcast with the run; it is not target authentication.
 
 The manager exports a JSON or Markdown report from the run record. The loopback-only `lab-server`
 returns deterministic fixture policies for an app that has been deliberately configured to use an
@@ -81,6 +88,7 @@ To add a clock surface:
 2. Install it through `protectiveHook` or another guarded helper.
 3. Use `ProcessRuleRuntime` rather than calling a clock API directly.
 4. Audit whether the surface can delegate to another hook; use `withConstructionBypass` when needed.
-5. Add pure arithmetic or codec tests where behavior changes, and validate on a disposable target application.
+5. Add pure arithmetic or codec tests where behavior changes, then add the surface to the authorized
+   `DateCapabilityProbe` or a customer-owned benchmark assertion before calling it supported.
 
 Do not add a broad hook that runs in every process. Scope is the primary safety boundary of the project.

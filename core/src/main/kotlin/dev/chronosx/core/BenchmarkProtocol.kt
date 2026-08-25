@@ -6,13 +6,20 @@ object BenchmarkProtocol {
     const val TARGET_PACKAGE = "dev.chronosx"
 
     const val EXTRA_RUN_ID = "dev.chronosx.extra.RUN_ID"
+    /** One-time correlation token for an authorized target's response to a specific Lab run. */
+    const val EXTRA_RUN_TOKEN = "dev.chronosx.extra.RUN_TOKEN"
     const val EXTRA_SCENARIO_ID = "dev.chronosx.extra.SCENARIO_ID"
     const val EXTRA_RULE_REVISION = "dev.chronosx.extra.RULE_REVISION"
+    const val EXTRA_FIXTURE_ID = "dev.chronosx.extra.FIXTURE_ID"
+    const val EXTRA_FIXTURE_RESPONSE_KIND = "dev.chronosx.extra.FIXTURE_RESPONSE_KIND"
+    const val EXTRA_FIXTURE_DELAY_MILLIS = "dev.chronosx.extra.FIXTURE_DELAY_MILLIS"
     const val EXTRA_SOURCE_PACKAGE = "dev.chronosx.extra.SOURCE_PACKAGE"
     const val EXTRA_PASSED = "dev.chronosx.extra.PASSED"
     const val EXTRA_PROCESS_NAME = "dev.chronosx.extra.PROCESS_NAME"
     const val EXTRA_OBSERVED_WALL_EPOCH_MILLIS = "dev.chronosx.extra.OBSERVED_WALL_EPOCH_MILLIS"
     const val EXTRA_OBSERVED_ZONE_ID = "dev.chronosx.extra.OBSERVED_ZONE_ID"
     const val EXTRA_OBSERVED_SURFACES = "dev.chronosx.extra.OBSERVED_SURFACES"
+    /** Encoded [DateCapabilityMatrixCodec] evidence from an authorized benchmark target. */
+    const val EXTRA_DATE_CAPABILITY_MATRIX = "dev.chronosx.extra.DATE_CAPABILITY_MATRIX"
     const val EXTRA_MESSAGE = "dev.chronosx.extra.MESSAGE"
 }

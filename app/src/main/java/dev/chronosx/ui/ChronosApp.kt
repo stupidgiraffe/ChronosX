@@ -81,12 +81,21 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.chronosx.core.TimeEngine
 import dev.chronosx.core.TimeMode
 import dev.chronosx.core.TimeRule
+import dev.chronosx.core.CustomScenario
+import dev.chronosx.core.CustomScenarioCodec
+import dev.chronosx.core.ControlledFixture
+import dev.chronosx.core.DateCapabilityMatrixCodec
+import dev.chronosx.core.DateCapabilityMatrixDecodeResult
+import dev.chronosx.core.FixtureResponseKind
 import dev.chronosx.core.LabScenario
 import dev.chronosx.core.HookSurface
 import dev.chronosx.core.MonotonicMode
 import dev.chronosx.core.ProcessPolicy
 import dev.chronosx.core.ProfileImportResult
+import dev.chronosx.core.RuntimeSurfaceState
+import dev.chronosx.core.RuntimeTelemetry
 import dev.chronosx.core.ScenarioCatalog
+import dev.chronosx.core.ScenarioCategory
 import dev.chronosx.core.TemporalProfile
 import dev.chronosx.core.TemporalProfileCodec
 import dev.chronosx.core.ZoneMode
@@ -122,13 +131,17 @@ fun ChronosApp(viewModel: ChronosViewModel) {
     val snackbarHost = remember { SnackbarHostState() }
     var destination by remember { mutableStateOf(RootDestination.DASHBOARD) }
     var editingPackage by remember { mutableStateOf<String?>(null) }
+    var editingCustomScenario by remember { mutableStateOf<CustomScenario?>(null) }
     var quickActionPackage by remember { mutableStateOf<String?>(null) }
     var pendingScenario by remember { mutableStateOf<LabScenario?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { snackbarHost.showSnackbar(it) }
     }
-    BackHandler(enabled = editingPackage != null) { editingPackage = null }
+    BackHandler(enabled = editingPackage != null || editingCustomScenario != null) {
+        editingPackage = null
+        editingCustomScenario = null
+    }
 
     if (editingPackage != null) {
         RuleEditorScreen(
@@ -140,6 +153,18 @@ fun ChronosApp(viewModel: ChronosViewModel) {
             onRemove = { packageName ->
                 viewModel.deleteRule(packageName)
                 editingPackage = null
+            },
+        )
+        return
+    }
+
+    editingCustomScenario?.let { scenario ->
+        CustomScenarioEditorScreen(
+            scenario = scenario,
+            onBack = { editingCustomScenario = null },
+            onSave = {
+                viewModel.saveCustomScenario(it)
+                editingCustomScenario = null
             },
         )
         return
@@ -234,6 +259,10 @@ fun ChronosApp(viewModel: ChronosViewModel) {
                 modifier = Modifier.padding(padding),
                 onLoadApplications = viewModel::loadInstalledApplications,
                 onSelectScenario = { pendingScenario = it },
+                onCreateCustomScenario = { editingCustomScenario = viewModel.newCustomScenario() },
+                onCustomizeScenario = { editingCustomScenario = viewModel.newCustomScenario(it) },
+                onEditCustomScenario = { editingCustomScenario = it },
+                onDeleteCustomScenario = viewModel::deleteCustomScenario,
                 onShareReport = { run ->
                     shareText(
                         context,
@@ -349,14 +378,39 @@ private fun DashboardScreen(
             }
         } else {
             items(state.activeTargets, key = { "${it.pid}:${it.processName}" }) { target ->
+                val telemetry = state.runtimeTelemetry.firstOrNull { it.processName == target.processName }
                 Card {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text(target.processName, fontWeight = FontWeight.SemiBold)
                         Text(
                             "PID ${target.pid} · UID ${target.uid} · ${target.state.lowercase(Locale.ROOT)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (telemetry == null) {
+                            Text(
+                                "No ChronosX runtime telemetry yet. The process may be outside scope or still needs a restart.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Text(
+                                "Revision ${telemetry.ruleRevision} · ${telemetry.phase.name.lowercase(Locale.ROOT).replace('_', ' ')}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                "${telemetry.installedSurfaces.size} installed · ${telemetry.observedSurfaces.size} observed · ${telemetry.failedSurfaces.size} failed",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            telemetry.message?.let { message ->
+                                Text(
+                                    message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -481,9 +535,14 @@ private fun ApplicationsScreen(
         }
         items(filteredApps, key = { it.packageName }) { application ->
             val rule = state.rules.firstOrNull { it.packageName == application.packageName }
+            val telemetry = state.runtimeTelemetry
+                .firstOrNull { it.packageName == application.packageName && it.processName == application.packageName }
+                ?: state.runtimeTelemetry.firstOrNull { it.packageName == application.packageName }
             ApplicationRow(
                 application = application,
                 rule = rule,
+                telemetry = telemetry,
+                frameworkStatus = state.frameworkStatus,
                 onClick = { onOpenRule(application.packageName) },
                 onLongPress = { onLongPress(application.packageName) },
             )
@@ -495,6 +554,8 @@ private fun ApplicationsScreen(
 private fun ApplicationRow(
     application: InstalledApplication,
     rule: TimeRule?,
+    telemetry: RuntimeTelemetry?,
+    frameworkStatus: FrameworkStatus,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -529,9 +590,33 @@ private fun ApplicationRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                RuleLifecycleLabel(rule, telemetry, frameworkStatus)
             }
             RuleBadge(rule)
         }
+    }
+}
+
+@Composable
+private fun RuleLifecycleLabel(
+    rule: TimeRule?,
+    telemetry: RuntimeTelemetry?,
+    frameworkStatus: FrameworkStatus,
+) {
+    val text = when {
+        rule?.enabled != true -> null
+        telemetry == null && rule.packageName !in frameworkStatus.scope -> "Scope pending"
+        telemetry == null -> "Restart or launch required"
+        telemetry.ruleRevision < rule.ruleRevision -> "Stale runtime revision ${telemetry.ruleRevision}"
+        telemetry.phase.name == "FAILED" -> "Runtime hook installation failed"
+        else -> "${telemetry.phase.name.lowercase(Locale.ROOT).replace('_', ' ')} · ${telemetry.observedSurfaces.size} observed"
+    }
+    text?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (telemetry?.phase?.name == "FAILED") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        )
     }
 }
 
@@ -662,6 +747,10 @@ private fun LabScreen(
     modifier: Modifier,
     onLoadApplications: () -> Unit,
     onSelectScenario: (LabScenario) -> Unit,
+    onCreateCustomScenario: () -> Unit,
+    onCustomizeScenario: (LabScenario) -> Unit,
+    onEditCustomScenario: (CustomScenario) -> Unit,
+    onDeleteCustomScenario: (String) -> Unit,
     onShareReport: (ScenarioRunEntity) -> Unit,
     onShareJson: (ScenarioRunEntity) -> Unit,
 ) {
@@ -680,10 +769,15 @@ private fun LabScreen(
         item {
             HelpCard(
                 "Scenario execution",
-                "A run saves a versioned rule, requests target launch, and waits for an optional benchmark result from an authorized test app.",
+                "A run snapshots its full policy, saves a versioned rule, requests target launch, and waits for optional evidence from an authorized test app.",
             )
         }
-        item { SectionHeader("Scenario library") }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                SectionHeader("Built-in scenario templates")
+                FilledTonalButton(onClick = onCreateCustomScenario) { Text("New custom") }
+            }
+        }
         items(ScenarioCatalog.all, key = { it.id }) { scenario ->
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -701,10 +795,60 @@ private fun LabScreen(
                             color = MaterialTheme.colorScheme.primary,
                         )
                     }
-                    FilledTonalButton(onClick = { onSelectScenario(scenario) }) {
-                        Icon(Icons.Outlined.PlayArrow, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Choose target and run")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = { onSelectScenario(scenario) }) {
+                            Icon(Icons.Outlined.PlayArrow, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Run")
+                        }
+                        OutlinedButton(onClick = { onCustomizeScenario(scenario) }) {
+                            Text("Customize")
+                        }
+                    }
+                }
+            }
+        }
+        item { SectionHeader("Custom scenarios") }
+        if (state.customScenarios.isEmpty()) {
+            item {
+                HelpCard(
+                    "Manual controls",
+                    "Create an editable scenario to set wall time, fixed instant, IANA zone, process policy, monotonic policy, controlled fixture, and expected observation without modifying a built-in template.",
+                )
+            }
+        } else {
+            items(state.customScenarios, key = { it.id }) { scenario ->
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text(scenario.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            scenario.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "${scenario.category.uiLabel} · ${scenario.profile.mode.uiLabel} · ${scenario.profile.processPolicy.uiLabel}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        scenario.controlledFixture?.let { fixture ->
+                            Text(
+                                "Controlled fixture: ${fixture.id} (${fixture.responseKind.name.lowercase(Locale.ROOT)})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = { onSelectScenario(scenario.toLabScenario()) }) {
+                                Icon(Icons.Outlined.PlayArrow, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Run")
+                            }
+                            OutlinedButton(onClick = { onEditCustomScenario(scenario) }) { Text("Edit") }
+                            TextButton(onClick = { onDeleteCustomScenario(scenario.id) }) {
+                                Text("Delete", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
                     }
                 }
             }
@@ -729,10 +873,435 @@ private fun LabScreen(
                             color = if (run.status == "OBSERVED_PASS") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(run.summary, style = MaterialTheme.typography.bodySmall)
                         run.observedZoneId?.let { Text("Observed zone: $it", style = MaterialTheme.typography.labelSmall) }
+                        run.observedDateMatrix?.let { encoded ->
+                            DateMatrixSummary(encoded)
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = { onShareReport(run) }) { Text("Share Markdown") }
                             OutlinedButton(onClick = { onShareJson(run) }) { Text("Share JSON") }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DateMatrixSummary(encodedMatrix: String) {
+    when (val decoded = DateCapabilityMatrixCodec.decode(encodedMatrix)) {
+        is DateCapabilityMatrixDecodeResult.Decoded -> {
+            val matrix = decoded.matrix
+            val observed = matrix.observations.count { it.state.name == "OBSERVED" }
+            val errors = matrix.observations.count { it.state.name == "ERROR" }
+            val dates = matrix.observations.mapNotNull { it.localDate }.distinct().take(3)
+            Text(
+                "Date matrix: $observed/${matrix.observations.size} sampled · $errors errors",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (errors == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+            Text(
+                "Default zone ${matrix.defaultZoneId}" + if (dates.isEmpty()) "" else " · ${dates.joinToString()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        is DateCapabilityMatrixDecodeResult.Invalid -> Text(
+            "Date matrix could not be decoded: ${decoded.message}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+/** Full manual Lab policy editor. Built-in scenarios are immutable templates; this screen is not. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomScenarioEditorScreen(
+    scenario: CustomScenario,
+    onBack: () -> Unit,
+    onSave: (CustomScenario) -> Unit,
+) {
+    val context = LocalContext.current
+    var title by remember(scenario.id, scenario.updatedAtEpochMillis) { mutableStateOf(scenario.title) }
+    var description by remember(scenario.id, scenario.updatedAtEpochMillis) { mutableStateOf(scenario.description) }
+    var expectedObservation by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.expectedObservation)
+    }
+    var category by remember(scenario.id, scenario.updatedAtEpochMillis) { mutableStateOf(scenario.category) }
+    var mode by remember(scenario.id, scenario.updatedAtEpochMillis) { mutableStateOf(scenario.profile.mode) }
+    var offsetInput by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.profile.offsetMillis.toString())
+    }
+    var fixedEpochMillis by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.profile.fixedEpochMillis.takeIf { it != 0L } ?: System.currentTimeMillis())
+    }
+    var zoneMode by remember(scenario.id, scenario.updatedAtEpochMillis) { mutableStateOf(scenario.profile.zoneMode) }
+    var zoneIdInput by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.profile.zoneId ?: ZoneId.systemDefault().id)
+    }
+    var monotonicMode by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.profile.monotonicMode)
+    }
+    var monotonicOffsetInput by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.profile.monotonicOffsetMillis.toString())
+    }
+    var processPolicy by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.profile.processPolicy)
+    }
+    var fixtureEnabled by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.controlledFixture != null)
+    }
+    var fixtureId by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.controlledFixture?.id.orEmpty())
+    }
+    var fixtureKind by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf(scenario.controlledFixture?.responseKind ?: FixtureResponseKind.VALID)
+    }
+    var fixtureDelayInput by remember(scenario.id, scenario.updatedAtEpochMillis) {
+        mutableStateOf((scenario.controlledFixture?.delayMillis ?: 0L).toString())
+    }
+    var showZonePicker by remember { mutableStateOf(false) }
+
+    val offset = offsetInput.toLongOrNull()
+    val monotonicOffset = monotonicOffsetInput.toLongOrNull()
+    val fixtureDelay = fixtureDelayInput.toLongOrNull()
+    val selectedZone = zoneIdInput.toZoneOrNull() ?: ZoneId.systemDefault()
+    val zoneValid = zoneMode != ZoneMode.VIRTUAL_DEFAULT || zoneIdInput.toZoneOrNull() != null
+    val profile = scenario.profile.copy(
+        id = scenario.profile.id.ifBlank { "custom-${scenario.id}" },
+        name = title.trim().ifBlank { "Custom scenario" },
+        description = description.trim(),
+        mode = mode,
+        offsetMillis = offset ?: 0L,
+        fixedEpochMillis = fixedEpochMillis,
+        zoneMode = zoneMode,
+        zoneId = if (zoneMode == ZoneMode.VIRTUAL_DEFAULT) selectedZone.id else null,
+        monotonicMode = monotonicMode,
+        monotonicOffsetMillis = monotonicOffset ?: 0L,
+        processPolicy = processPolicy,
+    )
+    val fixture = if (fixtureEnabled) {
+        ControlledFixture(
+            id = fixtureId.trim(),
+            responseKind = fixtureKind,
+            delayMillis = fixtureDelay ?: 0L,
+        )
+    } else {
+        null
+    }
+    val draft = scenario.copy(
+        title = title.trim(),
+        description = description.trim(),
+        category = category,
+        profile = profile,
+        expectedObservation = expectedObservation.trim(),
+        controlledFixture = fixture,
+    )
+    val canSave = title.isNotBlank() && expectedObservation.isNotBlank() && zoneValid &&
+        (mode != TimeMode.OFFSET || offset != null) &&
+        (monotonicMode != MonotonicMode.OFFSET || monotonicOffset != null) &&
+        (!fixtureEnabled || (fixtureId.isNotBlank() && (fixtureDelay?.let { it >= 0L } == true)))
+
+    if (showZonePicker) {
+        ZonePickerDialog(
+            selectedZoneId = zoneIdInput,
+            onDismiss = { showZonePicker = false },
+            onSelect = {
+                zoneIdInput = it
+                showZonePicker = false
+            },
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Custom Lab scenario") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                top = padding.calculateTopPadding() + 12.dp,
+                end = 20.dp,
+                bottom = 28.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                HelpCard(
+                    "Manual, reproducible policy",
+                    "This scenario snapshots its time, zone, process, interval-clock, and controlled-fixture choices into every Lab evidence record.",
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Scenario title") },
+                    isError = title.isBlank(),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    label = { Text("Purpose / notes") },
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = expectedObservation,
+                    onValueChange = { expectedObservation = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    label = { Text("Expected observation") },
+                    supportingText = { Text("State the assertion your authorized mock or test target should report.") },
+                    isError = expectedObservation.isBlank(),
+                )
+            }
+            item { SectionHeader("Scenario category") }
+            item {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ScenarioCategory.entries.forEach { option ->
+                        FilterChip(
+                            selected = category == option,
+                            onClick = { category = option },
+                            label = { Text(option.uiLabel) },
+                        )
+                    }
+                }
+            }
+            item { SectionHeader("Wall-clock policy") }
+            item {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TimeMode.entries.forEach { option ->
+                        FilterChip(
+                            selected = mode == option,
+                            onClick = { mode = option },
+                            label = { Text(option.uiLabel) },
+                        )
+                    }
+                }
+            }
+            if (mode == TimeMode.OFFSET) {
+                item {
+                    OutlinedTextField(
+                        value = offsetInput,
+                        onValueChange = { offsetInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("Wall-clock offset in milliseconds") },
+                        supportingText = { Text(offset?.let(::formatOffset) ?: "Enter a whole-number offset.") },
+                        isError = offset == null,
+                    )
+                }
+                item {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OffsetShortcut("Yesterday", -DAY_MILLIS) { offsetInput = it.toString() }
+                        OffsetShortcut("Now", 0L) { offsetInput = it.toString() }
+                        OffsetShortcut("Tomorrow", DAY_MILLIS) { offsetInput = it.toString() }
+                        OffsetShortcut("+1 week", 7 * DAY_MILLIS) { offsetInput = it.toString() }
+                    }
+                }
+            }
+            item { SectionHeader("Default timezone policy") }
+            item {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ZoneMode.entries.forEach { option ->
+                        FilterChip(
+                            selected = zoneMode == option,
+                            onClick = { zoneMode = option },
+                            label = { Text(option.uiLabel) },
+                        )
+                    }
+                }
+            }
+            if (zoneMode == ZoneMode.VIRTUAL_DEFAULT) {
+                item {
+                    Card {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(selectedZone.id, style = MaterialTheme.typography.titleSmall)
+                            OutlinedButton(onClick = { showZonePicker = true }) { Text("Choose IANA timezone") }
+                            Text(
+                                "Default-zone calendar and supported Java/Android zone paths use this selected zone.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            if (mode == TimeMode.FIXED_TIME) {
+                item {
+                    FixedTimePicker(
+                        fixedEpochMillis = fixedEpochMillis,
+                        zone = selectedZone,
+                        onEpochSelected = { fixedEpochMillis = it },
+                    )
+                }
+            }
+            item { SectionHeader("Process and interval-clock policy") }
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Target processes", style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ProcessPolicy.entries.forEach { option ->
+                                FilterChip(
+                                    selected = processPolicy == option,
+                                    onClick = { processPolicy = option },
+                                    label = { Text(option.uiLabel) },
+                                )
+                            }
+                        }
+                        Text("Monotonic clocks", style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MonotonicMode.entries.forEach { option ->
+                                FilterChip(
+                                    selected = monotonicMode == option,
+                                    onClick = { monotonicMode = option },
+                                    label = { Text(option.uiLabel) },
+                                )
+                            }
+                        }
+                        if (monotonicMode == MonotonicMode.OFFSET) {
+                            OutlinedTextField(
+                                value = monotonicOffsetInput,
+                                onValueChange = { monotonicOffsetInput = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                label = { Text("Monotonic offset in milliseconds") },
+                                isError = monotonicOffset == null,
+                            )
+                        } else {
+                            Text(
+                                "Preserve keeps elapsed, uptime, and nano clocks physically coherent.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            item { SectionHeader("Controlled fixture (optional)") }
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Owned mock/staging fixture", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Launch metadata tells an authorized target which loopback Lab-server fixture to use.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(checked = fixtureEnabled, onCheckedChange = { fixtureEnabled = it })
+                        }
+                        if (fixtureEnabled) {
+                            OutlinedTextField(
+                                value = fixtureId,
+                                onValueChange = { fixtureId = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                label = { Text("Fixture ID") },
+                                isError = fixtureId.isBlank(),
+                            )
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                FixtureResponseKind.entries.forEach { option ->
+                                    FilterChip(
+                                        selected = fixtureKind == option,
+                                        onClick = { fixtureKind = option },
+                                        label = { Text(option.name.lowercase(Locale.ROOT).replace('_', ' ')) },
+                                    )
+                                }
+                            }
+                            OutlinedTextField(
+                                value = fixtureDelayInput,
+                                onValueChange = { fixtureDelayInput = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                label = { Text("Fixture delay in milliseconds") },
+                                supportingText = { Text("Loopback Lab server clamps delay to 30 seconds.") },
+                                isError = fixtureDelay?.let { it < 0L } != false,
+                            )
+                        }
+                    }
+                }
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Scenario preview", style = MaterialTheme.typography.titleSmall)
+                        val physicalNow = System.currentTimeMillis()
+                        val previewRule = profile.applyTo("dev.chronosx.authorized.mock")
+                        Text("Device: ${formatEpoch(physicalNow, ZoneId.systemDefault())}", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Target wall clock: ${formatEpoch(TimeEngine.epochMillis(previewRule, physicalNow), selectedZone)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "${processPolicy.uiLabel} · ${monotonicMode.uiLabel}" +
+                                (fixture?.let { " · fixture ${it.id}" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            shareText(
+                                context,
+                                "ChronosX custom scenario",
+                                CustomScenarioCodec.encode(draft),
+                            )
+                        },
+                        enabled = canSave,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Export") }
+                    FilledTonalButton(
+                        onClick = { onSave(draft) },
+                        modifier = Modifier.weight(1f),
+                        enabled = canSave,
+                    ) {
+                        Icon(Icons.Outlined.CheckCircle, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Save")
                     }
                 }
             }
@@ -1282,6 +1851,19 @@ private fun DebugScreen(
         item {
             FrameworkDiagnosticCard(state.frameworkStatus, state.activeTargets.size)
         }
+        item { SectionHeader("Runtime telemetry") }
+        if (state.runtimeTelemetry.isEmpty()) {
+            item {
+                HelpCard(
+                    "No runtime evidence",
+                    "Save an enabled rule, restart the target, then refresh. ChronosX only records telemetry from its own scoped runtime.",
+                )
+            }
+        } else {
+            items(state.runtimeTelemetry, key = { "${it.packageName}:${it.processName}" }) { telemetry ->
+                RuntimeTelemetryCard(telemetry)
+            }
+        }
         if (state.logs.isEmpty()) {
             item {
                 EmptyCard(
@@ -1292,6 +1874,31 @@ private fun DebugScreen(
             }
         } else {
             items(state.logs, key = { it.id }) { entry -> DebugLogRow(entry) }
+        }
+    }
+}
+
+@Composable
+private fun RuntimeTelemetryCard(telemetry: RuntimeTelemetry) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(telemetry.processName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(telemetry.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            DiagnosticLine("Rule revision", telemetry.ruleRevision.toString())
+            DiagnosticLine("Lifecycle", telemetry.phase.name.lowercase(Locale.ROOT).replace('_', ' '))
+            DiagnosticLine("Installed surfaces", telemetry.installedSurfaces.size.toString())
+            DiagnosticLine("Observed surfaces", telemetry.observedSurfaces.size.toString())
+            DiagnosticLine("Failed surfaces", telemetry.failedSurfaces.size.toString())
+            telemetry.failedSurfaces.takeIf { it.isNotEmpty() }?.let { failures ->
+                Text(
+                    failures.entries.joinToString { "${it.key}: ${it.value}" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            telemetry.message?.let { message ->
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
@@ -1399,9 +2006,17 @@ private fun SettingsScreen(
         }
         item { SectionHeader("Runtime capability registry") }
         items(HookSurface.entries, key = { it.wireName }) { surface ->
+            val runtimeState = state.runtimeSurfaceState(surface)
             Card {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(surface.wireName, style = MaterialTheme.typography.titleSmall)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(surface.wireName, style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            runtimeState.uiLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = runtimeSurfaceStateColor(runtimeState),
+                        )
+                    }
                     Text(
                         "${surface.domain.name.lowercase(Locale.ROOT)} · Android API ${surface.minimumAndroidApi}+",
                         style = MaterialTheme.typography.labelSmall,
@@ -1414,6 +2029,32 @@ private fun SettingsScreen(
         }
     }
 }
+
+private fun ChronosUiState.runtimeSurfaceState(surface: HookSurface): RuntimeSurfaceState {
+    val states = runtimeTelemetry.map { it.surfaceState(surface) }
+    return when {
+        RuntimeSurfaceState.OBSERVED in states -> RuntimeSurfaceState.OBSERVED
+        RuntimeSurfaceState.INSTALLED in states -> RuntimeSurfaceState.INSTALLED
+        RuntimeSurfaceState.FAILED in states -> RuntimeSurfaceState.FAILED
+        else -> RuntimeSurfaceState.NOT_REPORTED
+    }
+}
+
+private val RuntimeSurfaceState.uiLabel: String
+    get() = when (this) {
+        RuntimeSurfaceState.OBSERVED -> "Observed"
+        RuntimeSurfaceState.INSTALLED -> "Installed"
+        RuntimeSurfaceState.FAILED -> "Unavailable"
+        RuntimeSurfaceState.NOT_REPORTED -> "Not reported"
+    }
+
+@Composable
+private fun runtimeSurfaceStateColor(state: RuntimeSurfaceState): Color = when (state) {
+        RuntimeSurfaceState.OBSERVED -> MaterialTheme.colorScheme.primary
+        RuntimeSurfaceState.INSTALLED -> MaterialTheme.colorScheme.secondary
+        RuntimeSurfaceState.FAILED -> MaterialTheme.colorScheme.error
+        RuntimeSurfaceState.NOT_REPORTED -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
 @Composable
 private fun HelpCard(title: String, message: String) {
@@ -1485,6 +2126,16 @@ private val ProcessPolicy.uiLabel: String
     get() = when (this) {
         ProcessPolicy.MAIN_PROCESS_ONLY -> "Main only"
         ProcessPolicy.ALL_PROCESSES -> "All processes"
+    }
+
+private val ScenarioCategory.uiLabel: String
+    get() = when (this) {
+        ScenarioCategory.BOUNDARY_TIME -> "Boundary time"
+        ScenarioCategory.TIMEZONE_AND_DST -> "Timezone / DST"
+        ScenarioCategory.EXPIRY_AND_TTL -> "Expiry / TTL"
+        ScenarioCategory.PROCESS_LIFECYCLE -> "Process lifecycle"
+        ScenarioCategory.MONOTONIC_CORRECTNESS -> "Monotonic clocks"
+        ScenarioCategory.HYBRID_POLICY -> "Hybrid policy"
     }
 
 private fun formatOffset(milliseconds: Long): String = when (milliseconds) {
