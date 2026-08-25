@@ -81,6 +81,7 @@ class TimeRuleRepository(
         ruleDao.upsert(disabled.toEntity())
         val remote = frameworkBridge.writeRule(disabled)
         frameworkBridge.removeScope(packageName)
+        frameworkBridge.clearRuntimeTelemetry(packageName)
         ruleDao.delete(packageName)
         return remote
     }
