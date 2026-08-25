@@ -65,16 +65,37 @@ jobs:
             echo "::error::The CHRONOSX_RELEASE_KEYSTORE_BASE64 secret is not valid Base64. Replace it with the value from the private setup bundle, or paste its complete NAME=VALUE line."
             exit 1
           fi
+      - name: Verify release keystore identity
+        run: |
+          # This is the SHA-256 of the private PKCS#12 container generated for
+          # ChronosX. It is not a credential; it only detects a mismatched or
+          # stale Base64 secret before Gradle spends time compiling the app.
+          expected_sha256="2cc757629a457149141481b07dfe379d2cc32f1c68d9ff9f750a6345d9418941"
+          actual_sha256="$(sha256sum "$RUNNER_TEMP/chronosx-release.p12" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$expected_sha256" ]; then
+            echo "::error::The decoded keystore is not the ChronosX release keystore. Replace CHRONOSX_RELEASE_KEYSTORE_BASE64 with the original private setup value."
+            exit 1
+          fi
+          if ! keytool -list \
+            -keystore "$RUNNER_TEMP/chronosx-release.p12" \
+            -storetype PKCS12 \
+            -storepass "$CHRONOSX_RELEASE_STORE_PASSWORD" \
+            -alias "$CHRONOSX_RELEASE_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::CHRONOSX_RELEASE_STORE_PASSWORD or CHRONOSX_RELEASE_KEY_ALIAS does not unlock the verified ChronosX release keystore. Replace that secret with its exact original value."
+            exit 1
+          fi
       - uses: gradle/actions/setup-gradle@v4
       - name: Run unit tests
         run: ./gradlew test --stacktrace
       - name: Build signed release APK
         run: |
+          # PKCS#12 uses the store password for its private-key entry. Passing
+          # it explicitly avoids a stale duplicate key-password secret.
           ./gradlew :app:assembleRelease :lab-sdk:assembleRelease --stacktrace \
             -Pchronosx.releaseStoreFile="$RUNNER_TEMP/chronosx-release.p12" \
             -Pchronosx.releaseStorePassword="$CHRONOSX_RELEASE_STORE_PASSWORD" \
             -Pchronosx.releaseKeyAlias="$CHRONOSX_RELEASE_KEY_ALIAS" \
-            -Pchronosx.releaseKeyPassword="$CHRONOSX_RELEASE_KEY_PASSWORD"
+            -Pchronosx.releaseKeyPassword="$CHRONOSX_RELEASE_STORE_PASSWORD"
       - name: Verify APK signature
         run: |
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
