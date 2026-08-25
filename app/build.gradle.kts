@@ -38,6 +38,9 @@ android {
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = file(checkNotNull(releaseStoreFile))
+                // The release key is intentionally generated as PKCS#12. Make the
+                // format explicit so signing does not depend on the JVM default.
+                storeType = "PKCS12"
                 storePassword = checkNotNull(releaseStorePassword)
                 keyAlias = checkNotNull(releaseKeyAlias)
                 keyPassword = checkNotNull(releaseKeyPassword)
