@@ -18,10 +18,11 @@ It changes only the time values visible inside package scopes you explicitly ena
 - Separate monotonic-clock policy: physical by default, explicit offset only for lab tests.
 - Main-process or all-package-process targeting, immutable rule revisions, and restart state.
 - Runnable scenario library: boundary time, TTL/expiry, DST, leap day, multi-process, monotonic, and hybrid-policy tests.
-- Portable versioned profile import/export and evidence reports shared as JSON/Markdown text.
-- Optional benchmark-result protocol for mock or customer-owned test applications; no companion is required.
+- Editable custom scenario builder for manual wall-clock, timezone, process, monotonic-clock, fixture, and assertion policies.
+- Portable versioned profile/scenario export and evidence reports shared as JSON/Markdown text.
+- Optional benchmark-result protocol and date-capability matrix for mock or customer-owned test applications; no companion is required.
 - Loopback-only controlled fixture server for staging and mock applications.
-- Manager diagnostics for framework status, scope, rule revisions, scenario history, and running hooked targets.
+- Manager diagnostics for framework status, scope, rule revisions, process lifecycle, per-surface install/failure/observation telemetry, scenario history, and running hooked targets.
 - Guarded modular hook registry: an unavailable surface does not crash the target application or block other hooks.
 - Saturating clock arithmetic and monotonic fixed-mode behavior to reduce timeout/scheduler failures.
 
@@ -32,11 +33,13 @@ It changes only the time values visible inside package scopes you explicitly ena
 | Java wall clock | `System.currentTimeMillis()` | Real, offset, or fixed epoch milliseconds |
 | Java monotonic clock | `System.nanoTime()` | Physical by default; explicit monotonic offset only |
 | Legacy date | `Date()` | One-time wall-clock transformation |
-| Legacy calendar | `Calendar.getInstance()` overloads | One-time wall-clock transformation |
+| Legacy calendar | `Calendar.getInstance()` and `GregorianCalendar()` current-time constructors | One-time wall-clock transformation |
+| Android ICU | `android.icu.util.Calendar.getInstance()` / `TimeZone.getDefault()` | One-time wall-clock transformation and virtual default zone |
 | `java.time` | `Instant.now()` | Virtual instant, preserving sub-millisecond precision for offset mode |
-| `java.time` | `LocalDate.now()` | Virtual local date in the target device zone |
-| `java.time` | `LocalDateTime.now()` | Virtual local date-time in the target device zone |
-| `java.time` | `OffsetDateTime.now()` / `ZonedDateTime.now()` | Virtual wall time in the configured default zone |
+| `java.time` | `LocalDate.now()` / `LocalDate.now(ZoneId)` | Virtual local date in the default or explicit zone |
+| `java.time` | `LocalDateTime.now()` / `LocalDateTime.now(ZoneId)` | Virtual local date-time in the default or explicit zone |
+| `java.time` | `OffsetDateTime.now()` / `ZonedDateTime.now()` and `ZoneId` overloads | Virtual wall time in the configured default or explicit zone |
+| `java.time` chronologies | `Year.now()`, `YearMonth.now()`, `MonthDay.now()`, `JapaneseDate.now()`, `HijrahDate.now()`, `MinguoDate.now()`, `ThaiBuddhistDate.now()` | Virtual date-derived values in the default or explicit zone |
 | `java.time` | `Clock.systemUTC()` | Rule-backed virtual clock |
 | `java.time` | `Clock.systemDefaultZone()` / `Clock.system(ZoneId)` | Rule-backed default or explicit-zone clock |
 | Default timezone | `TimeZone.getDefault()` / `ZoneId.systemDefault()` | Physical or configured virtual default zone |
@@ -87,12 +90,13 @@ The rule editor uses date/time pickers, an IANA timezone chooser, presets, proce
 
 ChronosX Lab turns a temporal rule into a reproducible authorized test run:
 
-1. Choose a built-in scenario and an installed target app.
+1. Choose a built-in template or create a fully editable custom scenario, then select an installed target app.
 2. ChronosX saves a new immutable rule revision and requests target launch.
-3. An optional mock or customer-owned app receives the run metadata through its launch intent and can return a benchmark result broadcast.
-4. ChronosX records the lifecycle, rule revision, optional observed values, and an exportable report.
+3. An optional mock or customer-owned app receives the run metadata and controlled-fixture choice through its launch intent and can return a benchmark result broadcast.
+4. The optional Lab SDK can capture a date-capability matrix covering supported legacy, `java.time`, chronology, and Android ICU date paths.
+5. ChronosX records the scenario snapshot, lifecycle, rule revision, optional observations, and an exportable report.
 
-Business-hours testing is only one local-policy fixture. The included scenario catalog also covers cache/TTL expiry, daylight-saving transitions, leap days, process consistency, monotonic behavior, and client-versus-controlled-backend disagreement.
+Business-hours testing is only one local-policy fixture. The included scenario catalog also covers cache/TTL expiry, daylight-saving transitions, leap days, process consistency, monotonic behavior, and client-versus-controlled-backend disagreement. Custom scenarios expose the same controls directly rather than forcing you to edit a preset.
 
 ### Controlled fixture server
 
@@ -106,7 +110,7 @@ It serves deterministic `valid`, `expired`, `stale`, `denied`, `retryable`, and 
 
 ### Benchmark protocol
 
-An authorized mock app can report an assertion with an explicit broadcast to `dev.chronosx`. The receiver stores the result as self-reported benchmark evidence; it never claims to prove behavior of an arbitrary third-party app. The contract is documented in [docs/benchmark-protocol.md](docs/benchmark-protocol.md).
+An authorized mock app can report an assertion with an explicit broadcast to `dev.chronosx`. The receiver stores the result as self-reported benchmark evidence; it never claims to prove behavior of an arbitrary third-party app. The optional `DateCapabilityProbe` in `lab-sdk` produces a concrete date/path matrix that the manager stores alongside the run. The contract is documented in [docs/benchmark-protocol.md](docs/benchmark-protocol.md).
 
 ## Safety model
 
@@ -119,6 +123,7 @@ ChronosX makes several intentional safety choices:
 - Remote preference changes replace an immutable process snapshot atomically.
 - Rule revisions, schema versions, process policy, zone policy, and monotonic policy travel together.
 - Each hook surface is represented in a versioned capability registry shared by runtime and manager documentation.
+- The runtime writes only its own package/process telemetry through remote preferences; the manager shows saved, scoped, installed, observed, stale, and failed states separately.
 - The module checks both API 102 and remote-preference capability before activation.
 
 ## Limitations
@@ -172,7 +177,7 @@ cd ChronosX
 ./gradlew :lab-server:test
 ```
 
-The project uses Gradle Kotlin DSL, Kotlin, Jetpack Compose, Room, a loopback fixture server, and `io.github.libxposed:api:102.0.0`. Unit tests cover clock arithmetic, zone resolution, profile interchange, scenario catalog coverage, remote preference decoding, package filtering, and controlled fixture responses.
+The project uses Gradle Kotlin DSL, Kotlin, Jetpack Compose, Room, a loopback fixture server, and `io.github.libxposed:api:102.0.0`. Unit tests cover clock arithmetic, zone resolution, profile/scenario interchange, date-matrix and runtime-telemetry codecs, scenario catalog coverage, remote preference decoding, package filtering, and controlled fixture responses.
 
 ### Release builds
 
