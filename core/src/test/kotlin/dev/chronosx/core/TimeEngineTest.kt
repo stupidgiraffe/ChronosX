@@ -1,5 +1,7 @@
 package dev.chronosx.core
 
+import java.time.Instant
+import java.time.ZoneId
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertEquals
 
@@ -94,5 +96,25 @@ class TimeEngineTest {
 
         assertEquals(275L, TimeEngine.monotonicMillis(rule, 250L, anchor))
         assertEquals(275_000_000L, TimeEngine.monotonicNanos(rule, 250_000_000L, anchor))
+    }
+
+    @Test
+    fun `day month and year derive from the same virtual epoch`() {
+        val physical = Instant.parse("2026-12-31T15:30:00Z").toEpochMilli()
+        val rule = TimeRule(
+            packageName = "com.example.demo",
+            enabled = true,
+            mode = TimeMode.OFFSET,
+            offsetMillis = 86_400_000L,
+            zoneMode = ZoneMode.VIRTUAL_DEFAULT,
+            zoneId = "Asia/Tokyo",
+        )
+
+        val local = Instant.ofEpochMilli(TimeEngine.epochMillis(rule, physical))
+            .atZone(ZoneId.of("Asia/Tokyo"))
+
+        assertEquals(2027, local.year)
+        assertEquals(1, local.monthValue)
+        assertEquals(2, local.dayOfMonth)
     }
 }
