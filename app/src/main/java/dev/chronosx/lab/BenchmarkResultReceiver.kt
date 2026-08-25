@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import dev.chronosx.ChronosXApplication
 import dev.chronosx.core.BenchmarkProtocol
+import dev.chronosx.core.DateCapabilityMatrixCodec
+import dev.chronosx.core.DateCapabilityMatrixDecodeResult
 import dev.chronosx.data.BenchmarkObservation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +26,7 @@ class BenchmarkResultReceiver : BroadcastReceiver() {
                 application?.container?.scenarioRunRepository?.recordObservation(
                     BenchmarkObservation(
                         runId = runId,
+                        runToken = intent.getStringExtra(BenchmarkProtocol.EXTRA_RUN_TOKEN).orEmpty(),
                         sourcePackage = intent.getStringExtra(BenchmarkProtocol.EXTRA_SOURCE_PACKAGE)
                             ?: "unknown",
                         processName = intent.getStringExtra(BenchmarkProtocol.EXTRA_PROCESS_NAME),
@@ -34,6 +37,12 @@ class BenchmarkResultReceiver : BroadcastReceiver() {
                         }?.getLongExtra(BenchmarkProtocol.EXTRA_OBSERVED_WALL_EPOCH_MILLIS, 0L),
                         observedZoneId = intent.getStringExtra(BenchmarkProtocol.EXTRA_OBSERVED_ZONE_ID),
                         observedSurfaces = intent.getStringExtra(BenchmarkProtocol.EXTRA_OBSERVED_SURFACES),
+                        dateCapabilityMatrix = intent
+                            .getStringExtra(BenchmarkProtocol.EXTRA_DATE_CAPABILITY_MATRIX)
+                            ?.let(DateCapabilityMatrixCodec::decode)
+                            ?.let { result ->
+                                (result as? DateCapabilityMatrixDecodeResult.Decoded)?.matrix
+                            },
                         message = intent.getStringExtra(BenchmarkProtocol.EXTRA_MESSAGE),
                     ),
                 )
