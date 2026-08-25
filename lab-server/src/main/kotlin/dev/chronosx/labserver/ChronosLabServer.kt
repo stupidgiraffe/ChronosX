@@ -54,7 +54,7 @@ private object FixtureCatalog {
         val query = uri.queryParameters()
         val requested = query["fixture"] ?: "valid"
         val delay = query["delayMillis"]?.toLongOrNull()?.coerceIn(0L, MAX_DELAY_MILLIS) ?: 0L
-        val kind = when (requested.lowercase()) {
+        val kind = query["kind"]?.toFixtureResponseKindOrNull() ?: when (requested.lowercase()) {
             "valid" -> FixtureResponseKind.VALID
             "expired" -> FixtureResponseKind.EXPIRED
             "stale" -> FixtureResponseKind.STALE
@@ -68,6 +68,9 @@ private object FixtureCatalog {
 
     private const val MAX_DELAY_MILLIS = 30_000L
 }
+
+private fun String.toFixtureResponseKindOrNull(): FixtureResponseKind? =
+    runCatching { FixtureResponseKind.valueOf(uppercase()) }.getOrNull()
 
 private data class FixtureResponse(
     val status: Int,
