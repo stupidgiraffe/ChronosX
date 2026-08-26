@@ -89,6 +89,8 @@ To add a clock surface:
 3. Use `ProcessRuleRuntime` rather than calling a clock API directly.
 4. Audit whether the surface can delegate to another hook; use `withConstructionBypass` when needed.
 5. Add pure arithmetic or codec tests where behavior changes, then add the surface to the authorized
-   `DateCapabilityProbe` or a customer-owned benchmark assertion before calling it supported.
+   `DateCapabilityProbe` or a customer-owned benchmark assertion before calling it supported. The
+   probe must expose enough date components to compare the path with its virtual reference epoch;
+   raw date strings alone are not sufficient evidence.
 
 Do not add a broad hook that runs in every process. Scope is the primary safety boundary of the project.

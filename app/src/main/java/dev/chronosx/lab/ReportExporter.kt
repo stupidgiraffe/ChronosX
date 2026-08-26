@@ -3,6 +3,7 @@ package dev.chronosx.lab
 import dev.chronosx.data.FrameworkStatus
 import dev.chronosx.data.DevicePostureSnapshot
 import dev.chronosx.data.ScenarioRunEntity
+import dev.chronosx.core.DateCapabilityAnalyzer
 import dev.chronosx.core.DateCapabilityMatrixCodec
 import dev.chronosx.core.DateCapabilityMatrixDecodeResult
 
@@ -10,7 +11,7 @@ import dev.chronosx.core.DateCapabilityMatrixDecodeResult
 object ReportExporter {
     fun json(run: ScenarioRunEntity, framework: FrameworkStatus, posture: DevicePostureSnapshot): String = buildString {
         append("{\n")
-        jsonField("reportVersion", "2", raw = true, trailing = true)
+        jsonField("reportVersion", "3", raw = true, trailing = true)
         jsonField("runId", run.runId, trailing = true)
         jsonField("scenarioId", run.scenarioId, trailing = true)
         jsonField("scenarioTitle", run.scenarioTitle, trailing = true)
@@ -27,6 +28,7 @@ object ReportExporter {
         jsonField("observedProcessName", run.observedProcessName, trailing = true)
         jsonField("observedSurfaces", run.observedSurfaces, trailing = true)
         append("  \"dateCapabilityMatrix\": ").append(dateMatrixJson(run.observedDateMatrix)).append(",\n")
+        append("  \"dateCapabilityAnalysis\": ").append(dateMatrixAnalysisJson(run.observedDateMatrix)).append(",\n")
         append("  \"framework\": {\n")
         append("    \"connected\": ${framework.connected},\n")
         append("    \"name\": ${jsonValue(framework.frameworkName)},\n")
@@ -94,9 +96,43 @@ object ReportExporter {
                 append("\"state\":").append(jsonValue(observation.state.name)).append(',')
                 append("\"observedEpochMillis\":")
                     .append(observation.observedEpochMillis?.toString() ?: "null").append(',')
+                append("\"referenceEpochMillis\":")
+                    .append(observation.referenceEpochMillis?.toString() ?: "null").append(',')
                 append("\"localDate\":").append(jsonValue(observation.localDate)).append(',')
+                append("\"localYear\":").append(observation.localYear?.toString() ?: "null").append(',')
+                append("\"localMonth\":").append(observation.localMonth?.toString() ?: "null").append(',')
+                append("\"localDayOfMonth\":")
+                    .append(observation.localDayOfMonth?.toString() ?: "null").append(',')
+                append("\"localDayOfWeek\":").append(jsonValue(observation.localDayOfWeek)).append(',')
                 append("\"zoneId\":").append(jsonValue(observation.zoneId)).append(',')
                 append("\"detail\":").append(jsonValue(observation.detail))
+                append('}')
+            }
+            append("]}")
+        }
+    }
+
+    private fun dateMatrixAnalysisJson(encoded: String?): String {
+        val matrix = encoded
+            ?.let(DateCapabilityMatrixCodec::decode)
+            ?.let { it as? DateCapabilityMatrixDecodeResult.Decoded }
+            ?.matrix
+            ?: return "null"
+        val analysis = DateCapabilityAnalyzer.analyze(matrix)
+        return buildString {
+            append("{\"consistent\":").append(analysis.isConsistent).append(',')
+            append("\"comparedSurfaceCount\":").append(analysis.comparedSurfaceCount).append(',')
+            append("\"matchingSurfaces\":").append(jsonArray(analysis.matchingSurfaces)).append(',')
+            append("\"nonComparableSurfaces\":").append(jsonArray(analysis.nonComparableSurfaces)).append(',')
+            append("\"unavailableSurfaces\":").append(jsonArray(analysis.unavailableSurfaces)).append(',')
+            append("\"errorSurfaces\":").append(jsonArray(analysis.errorSurfaces)).append(',')
+            append("\"divergentSurfaces\":[")
+            analysis.divergentSurfaces.forEachIndexed { index, divergence ->
+                if (index > 0) append(',')
+                append("{\"surface\":").append(jsonValue(divergence.surface)).append(',')
+                append("\"components\":").append(
+                    jsonArray(divergence.mismatchedComponents.map { it.name }.sorted()),
+                )
                 append('}')
             }
             append("]}")
@@ -112,15 +148,34 @@ object ReportExporter {
         val observed = matrix.observations.count { it.state.name == "OBSERVED" }
         val errors = matrix.observations.count { it.state.name == "ERROR" }
         appendLine("- Date capability matrix: $observed/${matrix.observations.size} sampled, $errors errors, default zone=${matrix.defaultZoneId}")
+        val analysis = DateCapabilityAnalyzer.analyze(matrix)
+        appendLine(
+            "- Date consistency: ${analysis.comparedSurfaceCount} compared, " +
+                "${analysis.matchingSurfaces.size} matching, ${analysis.divergentSurfaces.size} divergent, " +
+                "${analysis.nonComparableSurfaces.size} non-comparable",
+        )
+        analysis.divergentSurfaces.forEach { divergence ->
+            appendLine(
+                "  - Divergent ${divergence.surface}: " +
+                    divergence.mismatchedComponents.joinToString { it.name.lowercase() },
+            )
+        }
         matrix.observations.forEach { observation ->
             appendLine(
                 "  - ${observation.surface}: ${observation.state.name.lowercase()}" +
                     (observation.localDate?.let { ", date=$it" } ?: "") +
+                    (observation.localYear?.let { ", year=$it" } ?: "") +
+                    (observation.localMonth?.let { ", month=$it" } ?: "") +
+                    (observation.localDayOfMonth?.let { ", day=$it" } ?: "") +
+                    (observation.localDayOfWeek?.let { ", weekday=$it" } ?: "") +
                     (observation.zoneId?.let { ", zone=$it" } ?: "") +
                     (observation.detail?.let { ", detail=$it" } ?: ""),
             )
         }
     }
+
+    private fun jsonArray(values: List<String>): String =
+        values.joinToString(prefix = "[", postfix = "]") { value -> jsonValue(value) }
 
     private fun escape(value: String): String = buildString {
         value.forEach { character ->

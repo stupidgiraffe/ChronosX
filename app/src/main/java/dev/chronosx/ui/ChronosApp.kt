@@ -84,6 +84,7 @@ import dev.chronosx.core.TimeRule
 import dev.chronosx.core.CustomScenario
 import dev.chronosx.core.CustomScenarioCodec
 import dev.chronosx.core.ControlledFixture
+import dev.chronosx.core.DateCapabilityAnalyzer
 import dev.chronosx.core.DateCapabilityMatrixCodec
 import dev.chronosx.core.DateCapabilityMatrixDecodeResult
 import dev.chronosx.core.FixtureResponseKind
@@ -895,16 +896,29 @@ private fun DateMatrixSummary(encodedMatrix: String) {
             val observed = matrix.observations.count { it.state.name == "OBSERVED" }
             val errors = matrix.observations.count { it.state.name == "ERROR" }
             val dates = matrix.observations.mapNotNull { it.localDate }.distinct().take(3)
+            val analysis = DateCapabilityAnalyzer.analyze(matrix)
             Text(
-                "Date matrix: $observed/${matrix.observations.size} sampled · $errors errors",
+                "Date matrix: $observed/${matrix.observations.size} sampled · $errors errors · " +
+                    "${analysis.divergentSurfaces.size} divergent",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (errors == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                color = if (errors == 0 && analysis.isConsistent) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
             )
             Text(
                 "Default zone ${matrix.defaultZoneId}" + if (dates.isEmpty()) "" else " · ${dates.joinToString()}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            analysis.divergentSurfaces.takeIf { it.isNotEmpty() }?.let { divergences ->
+                Text(
+                    "Divergent surfaces: ${divergences.joinToString { it.surface }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
 
         is DateCapabilityMatrixDecodeResult.Invalid -> Text(
@@ -1066,7 +1080,7 @@ private fun CustomScenarioEditorScreen(
                     onValueChange = { expectedObservation = it },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2,
-                    label = { Text("Expected observation") },
+                    label = { Text("Benchmark assertion") },
                     supportingText = { Text("State the assertion your authorized mock or test target should report.") },
                     isError = expectedObservation.isBlank(),
                 )

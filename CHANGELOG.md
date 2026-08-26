@@ -8,7 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
-- Date Capability Matrix protocol and `DateCapabilityProbe` for authorized mock/customer targets. The matrix captures observed epoch, local date, zone, and error state for supported legacy, `java.time`, chronology, and Android ICU paths.
+- Date Capability Matrix protocol and `DateCapabilityProbe` for authorized mock/customer targets. The matrix captures observed epoch, local date, year, month, day, weekday, zone, and error state for supported legacy, `java.time`, chronology, Android ICU, and diagnostic adapter paths.
+- Manager-side date-matrix divergence analysis, so reports and the Lab UI identify a date source that disagrees with the target's virtual wall-clock reference instead of merely listing raw observations.
 - Process-scoped runtime telemetry transported through libxposed remote preferences: rule loaded, hook installation, observed surfaces, and failures are visible in the manager.
 - Date-focused hook surfaces for `GregorianCalendar`, Android ICU Calendar/TimeZone, `ZoneId` overloads of Java time factories, and ISO/Japanese/Hijrah/Minguo/Thai chronology factories.
 - Best-effort ART deoptimization for documented wall-clock and timezone hooks.
