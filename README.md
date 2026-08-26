@@ -93,7 +93,7 @@ ChronosX Lab turns a temporal rule into a reproducible authorized test run:
 1. Choose a built-in template or create a fully editable custom scenario, then select an installed target app.
 2. ChronosX saves a new immutable rule revision and requests target launch.
 3. An optional mock or customer-owned app receives the run metadata and controlled-fixture choice through its launch intent and can return a benchmark result broadcast.
-4. The optional Lab SDK can capture a date-capability matrix covering supported legacy, `java.time`, chronology, and Android ICU date paths.
+4. The optional Lab SDK can capture a date-capability matrix covering supported legacy, `java.time`, chronology, Android ICU, and diagnostic adapter paths. Every date-valued sample carries its virtual reference epoch plus local year, month, day, weekday, and zone; the manager flags surfaces that disagree with that reference.
 5. ChronosX records the scenario snapshot, lifecycle, rule revision, optional observations, and an exportable report.
 
 Business-hours testing is only one local-policy fixture. The included scenario catalog also covers cache/TTL expiry, daylight-saving transitions, leap days, process consistency, monotonic behavior, and client-versus-controlled-backend disagreement. Custom scenarios expose the same controls directly rather than forcing you to edit a preset.
@@ -110,7 +110,7 @@ It serves deterministic `valid`, `expired`, `stale`, `denied`, `retryable`, and 
 
 ### Benchmark protocol
 
-An authorized mock app can report an assertion with an explicit broadcast to `dev.chronosx`. The receiver stores the result as self-reported benchmark evidence; it never claims to prove behavior of an arbitrary third-party app. The optional `DateCapabilityProbe` in `lab-sdk` produces a concrete date/path matrix that the manager stores alongside the run. The contract is documented in [docs/benchmark-protocol.md](docs/benchmark-protocol.md).
+An authorized mock app can report an assertion with an explicit broadcast to `dev.chronosx`. The receiver stores the result as self-reported benchmark evidence; it never claims to prove behavior of an arbitrary third-party app. The optional `DateCapabilityProbe` in `lab-sdk` produces a concrete date/path matrix that the manager stores alongside the run and evaluates for per-surface date divergence. The contract is documented in [docs/benchmark-protocol.md](docs/benchmark-protocol.md).
 
 ## Safety model
 

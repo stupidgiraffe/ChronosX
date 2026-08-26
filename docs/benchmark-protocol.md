@@ -48,8 +48,13 @@ run target, and marks a rule-revision mismatch as a failed observation.
 ## Date capability matrix
 
 `DateCapabilityProbe.capture()` in `lab-sdk` samples the supported date paths directly from the
-authorized target process. Each observation contains the API surface, state, epoch when applicable,
-local date, zone, and any failure detail. Include the resulting matrix in `BenchmarkResult`:
+authorized target process. Each date-valued observation contains the API surface, state, its own
+virtual reference epoch, local date, year, month, day, weekday, zone, and any failure detail. The
+manager compares those components to the reference epoch and names any divergent surface. This is
+particularly useful when a target's time-of-day behavior changes but its date remains physical.
+Adapter paths such as `Calendar.Builder.build()` and `now(Clock.systemDefaultZone())` are sampled
+as diagnostics; an application-provided `Clock` remains application-controlled. Include the
+resulting matrix in `BenchmarkResult`:
 
 ```kotlin
 val launch = ScenarioLaunchConfiguration.fromIntent(intent) ?: return
