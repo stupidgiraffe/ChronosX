@@ -183,10 +183,14 @@ object DateCapabilityProbe {
         zone: ZoneId,
         block: () -> DateParts,
     ) {
+        // The actual date call falls somewhere between these two readings. Using their midpoint
+        // avoids biasing the comparison to the instant after the call, which otherwise produces
+        // a false divergence when a sample happens exactly at a local-date boundary.
+        val referenceBeforeEpochMillis = System.currentTimeMillis()
         val result = runCatching(block)
-        // Local date-only APIs cannot expose an epoch themselves. Capture a same-process,
-        // virtual wall-clock reference immediately after the call for comparison in the manager.
-        val referenceEpochMillis = System.currentTimeMillis()
+        val referenceAfterEpochMillis = System.currentTimeMillis()
+        val referenceEpochMillis = referenceBeforeEpochMillis +
+            ((referenceAfterEpochMillis - referenceBeforeEpochMillis) / 2)
         add(
             result.fold(
                 onSuccess = { parts ->

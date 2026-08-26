@@ -166,6 +166,7 @@ object ReportExporter {
                     (observation.localDate?.let { ", date=$it" } ?: "") +
                     (observation.localYear?.let { ", year=$it" } ?: "") +
                     (observation.localMonth?.let { ", month=$it" } ?: "") +
+                    (observation.localDayOfMonth?.let { ", day=$it" } ?: "") +
                     (observation.localDayOfWeek?.let { ", weekday=$it" } ?: "") +
                     (observation.zoneId?.let { ", zone=$it" } ?: "") +
                     (observation.detail?.let { ", detail=$it" } ?: ""),
